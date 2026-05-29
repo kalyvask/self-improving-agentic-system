@@ -140,6 +140,14 @@ def test_cheaper_solve_earns_higher_credit():
     assign_credit(flat)
     assert flat.decisions[0].value_per_cost == 1.0
 
+    # Regression: a SOLVED task that hit/exceeded its budget must still train as a
+    # win, not get zeroed. The old `1 - spent/budget` drove credit to 0 for any
+    # solve at/over budget, which erased exactly the expensive-but-winning WIDER
+    # traces and taught the policy to avoid the action with the most headroom.
+    overspent = _solved_trace(0.25)        # spent > budget
+    assign_credit(overspent, budget=0.2)
+    assert overspent.decisions[0].value_per_cost > 0.0
+
 
 def test_stop_credit_comes_from_abstention_reward():
     # The bug we fixed: STOP must NOT be credited just because the task went

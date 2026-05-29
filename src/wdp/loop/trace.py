@@ -97,7 +97,8 @@ class TraceLog:
 
 def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
                   budget: float | None = None,
-                  advantage_floor: float = 0.5) -> None:
+                  advantage_floor: float = 0.5,
+                  cost_weight: float = 0.5) -> None:
     """Attach terminal reward + value-per-cost to each decision (in place).
 
     Spend decisions are credited by outcome *times* cost-efficiency *times* the
@@ -107,9 +108,15 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
 
       - outcome: `trace.terminal_reward`, the graded quality of the best answer
         (not a binary solved flag, so a partial reward still trains).
-      - cost-efficiency: `1 - spent/budget`. A solve that used little of its
-        budget keeps almost all its reward; one that burned the whole budget keeps
-        almost none. Without a budget this term is 1.0 (old cost-blind behavior).
+      - cost-efficiency: `1 - cost_weight * min(1, spent/budget)`, which lives in
+        `[1 - cost_weight, 1]`. A solve that used little budget keeps almost all
+        its reward; one that burned (or exceeded) the budget keeps `1-cost_weight`
+        of it -- reduced, but never zero. This is the fix for a real failure mode:
+        the old `1 - spent/budget` drove efficiency to 0 for any solve that hit the
+        budget, which erased the credit on exactly the expensive-but-winning WIDER
+        traces and taught the policy to avoid the action with the most headroom. A
+        *solved* task must always train as a win, just a less efficient one when
+        pricey. Without a budget this term is 1.0 (old cost-blind behavior).
       - contribution (advantage): how much this decision *raised the best process
         score seen so far*. A WIDER that spun a dead-end attempt and a DEEPER that
         finished the winner used to get identical credit on a solved task; now the
@@ -129,7 +136,8 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
         spent = sum(rec.marginal_cost for rec in trace.decisions)
     efficiency = 1.0
     if budget and budget > 0:
-        efficiency = max(0.0, 1.0 - min(1.0, spent / budget))
+        used = min(1.0, spent / budget)
+        efficiency = 1.0 - cost_weight * used
 
     # Per-step advantage = how much each decision raised the running-best process
     # score. Only positive moves count (a decision can't be blamed for noise dips).
