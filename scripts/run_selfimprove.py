@@ -32,18 +32,28 @@ def main() -> None:
     ap.add_argument("--currency", choices=["tokens", "latency", "dollars"], default="dollars")
     ap.add_argument("--budget", type=float, default=0.2)
     ap.add_argument("--max-decisions", type=int, default=4)
+    ap.add_argument("--atomic", type=int, default=8)
+    ap.add_argument("--multi", type=int, default=6)
+    ap.add_argument("--underspecified", type=int, default=2)
+    ap.add_argument("--frac-train", type=float, default=0.6)
+    ap.add_argument("--out", default=None,
+                    help="trace file path (default traces/traces.jsonl); set per "
+                         "run to avoid collisions when running learners concurrently")
     args = ap.parse_args()
 
     require_openrouter_key()
     cfg = load_config()
     models = cfg["models"]
-    bench = ArithmeticBenchmark()
+    bench = ArithmeticBenchmark(n_atomic=args.atomic, n_multi=args.multi,
+                                n_underspecified=args.underspecified, seed=0)
     tasks = bench.tasks()
-    train, eval_ = split(tasks, frac_train=0.6, seed=0)
+    train, eval_ = split(tasks, frac_train=args.frac_train, seed=0)
+    print(f"benchmark: {len(tasks)} tasks -> {len(train)} train, {len(eval_)} eval")
 
     run_cfg = RunConfig(currency=args.currency, budget=args.budget,
                         max_decisions=args.max_decisions)
-    trace_log = TraceLog(Path(cfg["paths"]["traces"]) / "traces.jsonl")
+    out = args.out or str(Path(cfg["paths"]["traces"]) / "traces.jsonl")
+    trace_log = TraceLog(out)
 
     with OpenRouterClient() as client:
         executor = Executor(client, models["cheap"], tools=bench.tools(),
