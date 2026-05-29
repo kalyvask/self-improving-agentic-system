@@ -50,6 +50,55 @@ allocation policy depends on which one you are spending:
   children, not the sum
 - dollars: OpenRouter usage cost when available
 
+## What we evaluate and why
+
+The question is not "can the agent solve the task" but "does the controller spend
+compute well, and does it get better at spending as it learns from its own
+traces." That shapes the metrics. All of them live in `wdp/metrics`.
+
+**Primary: success@budget, per currency.** Fraction of tasks solved when each task
+is capped at a fixed budget in one currency, reported as a curve over budgets and
+separately for tokens, latency, and dollars. This is the metric the project
+optimizes because the whole thesis is that the best allocation policy depends on
+which currency you are spending: a latency budget rewards parallel WIDER and
+DECOMPOSE branches (billed as the max of concurrent children), while a token
+budget rewards a frugal DEEPER refinement. A single cost-blind score would hide
+that, so success is always paired with a budget and a currency.
+
+**The self-improvement curve.** success@budget and cost, plotted per round across
+the bandit cold-start then the BC/DPO rounds. If learning is working the curve
+moves toward more solves at less spend relative to round 0. This is the headline
+result, not any single-round number.
+
+**pass^k (reliability), not pass@k (coverage).** pass^k is the fraction of tasks
+where all k attempts succeed; it is the honest consistency metric for an agent you
+would actually deploy, since users feel the worst case, not the best. pass@k (did
+any of k succeed) is kept only as a diagnostic ceiling: it conflates generation
+with selection and ignores cost, so a high pass@k with low pass^k means the
+attempts exist but the controller cannot reliably pick or reach them. That gap is
+the thing worth fixing, which is why both are reported.
+
+**Generation-verification gap.** Mean absolute difference between the best process
+score the Allocator could see mid-run and the ground-truth terminal reward. The
+controller acts on the cheap process score but is graded on terminal reward, so a
+large gap means selection (the verifier), not generation, is the bottleneck. It
+also predicts how hard on-policy methods like GRPO would be to train, since their
+advantages inherit verifier noise directly.
+
+**Risk-coverage, from the STOP arm.** STOP is a deliberate abstention. Sorting the
+answered (non-abstained) tasks by confidence and plotting accuracy against
+coverage shows whether the controller knows when not to spend. A useful STOP arm
+bends this curve upward: it abstains on the tasks it would have failed anyway.
+
+**Tail cost: p95 and CVaR.** A policy can win on mean cost and still be
+unshippable if its worst cases blow the budget. CVaR (mean of the worst tail) and
+p95 capture that, so cost is judged on its tail, not just its average.
+
+**METR task-horizon (stub).** The human-time length at which the agent crosses a
+target reliability (default 50 percent). Included as an economic-value framing for
+when tasks carry a human-time estimate; it is a stub until a benchmark supplies
+those estimates.
+
 ## Layout
 
 ```
