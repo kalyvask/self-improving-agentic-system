@@ -52,6 +52,16 @@ class NodeFeatures:
     decomposability: float = 0.0
     # Has the current Executor self-reported a stall/failure?
     executor_stalled: float = 0.0
+    # Structural distress/progress signals, free to compute from the trajectories
+    # (no extra model call). They separate the WIDER vs DEEPER vs STOP decision in
+    # ways the score stats wash out:
+    #   - tool_error_rate: fraction of steps so far whose tool/env call errored. A
+    #     flailing attempt (high errors) is a poor candidate for more DEEPER.
+    #   - attempts_done_frac: fraction of attempts that actually reached a final
+    #     answer. Low with budget left => attempts are truncating => DEEPER may
+    #     finish them; high but unsolved => a fresh WIDER is likelier to help.
+    tool_error_rate: float = 0.0
+    attempts_done_frac: float = 0.0
 
     def vector(self) -> np.ndarray:
         return np.array(
@@ -65,6 +75,8 @@ class NodeFeatures:
                 float(self.steps_taken),
                 self.decomposability,
                 self.executor_stalled,
+                self.tool_error_rate,
+                self.attempts_done_frac,
             ],
             dtype=np.float64,
         )
@@ -75,6 +87,7 @@ class NodeFeatures:
             "score_mean", "score_max", "score_std", "n_children",
             "budget_remaining_frac", "depth", "steps_taken",
             "decomposability", "executor_stalled",
+            "tool_error_rate", "attempts_done_frac",
         ]
 
 
@@ -89,7 +102,7 @@ class Allocator:
     """Base policy interface. Subclasses implement `decide`; trainable ones
     (BC, DPO) also implement `fit(traces)`."""
 
-    def decide(self, feats: NodeFeatures, currency: str) -> Decision:  # pragma: no cover
+    def decide(self, feats: NodeFeatures, currency: str, *, explore: bool = False) -> Decision:  # pragma: no cover
         raise NotImplementedError
 
     def fit(self, traces) -> None:  # pragma: no cover - bandit needs no offline fit
@@ -114,7 +127,9 @@ class BanditAllocator(Allocator):
         self._alpha = {a: 1.0 for a in SPEND_ACTIONS}
         self._beta = {a: 1.0 for a in SPEND_ACTIONS}
 
-    def decide(self, feats: NodeFeatures, currency: str) -> Decision:
+    def decide(self, feats: NodeFeatures, currency: str, *, explore: bool = False) -> Decision:
+        # Thompson sampling already explores, so `explore` is a no-op here; it
+        # exists only to share the Allocator.decide signature with BC/DPO.
         samples: dict[Action, float] = {}
         for a in SPEND_ACTIONS:
             samples[a] = float(self._rng.beta(self._alpha[a], self._beta[a]))

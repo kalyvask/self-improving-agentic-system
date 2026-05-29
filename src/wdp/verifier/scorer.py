@@ -70,7 +70,7 @@ class LLMProcessVerifier:
         "stalled, 1 = essentially solved. Output the number and nothing else."
     )
 
-    def score_step(self, task: object, partial_trajectory: str) -> Score:
+    def score_step(self, task: object, partial_trajectory: str, *, ledger=None) -> Score:
         messages = [
             {"role": "system", "content": self._PROMPT},
             {"role": "user", "content": f"TASK:\n{task}\n\nPARTIAL WORK:\n{partial_trajectory}"},
@@ -78,7 +78,7 @@ class LLMProcessVerifier:
         resp = self._client.chat(
             self._model,
             messages,
-            ledger=self._ledger,
+            ledger=ledger if ledger is not None else self._ledger,
             parallel_group=self._parallel_group,
             temperature=0.0,
             max_tokens=8,

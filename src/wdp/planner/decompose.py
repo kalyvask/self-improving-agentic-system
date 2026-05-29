@@ -69,28 +69,28 @@ class Planner:
         self._model = model
         self._ledger = ledger
 
-    def probe(self, task: Task, *, parallel_group=None) -> float:
+    def probe(self, task: Task, *, parallel_group=None, ledger=None) -> float:
         resp = self._client.chat(
             self._model,
             [
                 {"role": "system", "content": _PROBE},
                 {"role": "user", "content": str(task)},
             ],
-            ledger=self._ledger,
+            ledger=ledger if ledger is not None else self._ledger,
             parallel_group=parallel_group,
             temperature=0.0,
             max_tokens=8,
         )
         return min(1.0, max(0.0, _parse_float(resp.text)))
 
-    def decompose(self, task: Task, *, parallel_group=None) -> SubTaskDAG:
+    def decompose(self, task: Task, *, parallel_group=None, ledger=None) -> SubTaskDAG:
         resp = self._client.chat(
             self._model,
             [
                 {"role": "system", "content": _PLAN},
                 {"role": "user", "content": str(task)},
             ],
-            ledger=self._ledger,
+            ledger=ledger if ledger is not None else self._ledger,
             parallel_group=parallel_group,
             temperature=0.3,
         )

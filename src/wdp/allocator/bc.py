@@ -33,6 +33,7 @@ class BCAllocator(Allocator):
         *,
         keep_fraction: float = 0.3,
         weight_floor: float = 0.05,
+        explore_eps: float = 0.15,
         l2: float = 1e-3,
         lr: float = 0.2,
         epochs: int = 400,
@@ -40,6 +41,8 @@ class BCAllocator(Allocator):
     ) -> None:
         self.keep_fraction = keep_fraction
         self.weight_floor = weight_floor
+        self.explore_eps = explore_eps
+        self._rng = np.random.default_rng(seed)
         self._policy = LinearSoftmaxPolicy(
             n_features=len(NodeFeatures.names()), n_actions=len(ACTIONS),
             l2=l2, lr=lr, epochs=epochs, seed=seed,
@@ -63,13 +66,28 @@ class BCAllocator(Allocator):
             raise ValueError("BCAllocator.fit: no usable decisions in traces")
         self._policy.fit_bc(np.asarray(X), np.asarray(y), np.asarray(w))
 
-    def decide(self, feats: NodeFeatures, currency: str) -> Decision:
+    def decide(self, feats: NodeFeatures, currency: str, *, explore: bool = False) -> Decision:
         if not self._policy._fitted:
             raise RuntimeError("BCAllocator.decide called before fit()")
         p = self._policy.probs(feats.vector())
         scores = {a: float(p[i]) for i, a in enumerate(ACTIONS)}
-        best_i = int(np.argmax(p))
-        return Decision(action=ACTIONS[best_i], scores=scores)
+        i = _choose(p, self._rng, self.explore_eps) if explore else int(np.argmax(p))
+        return Decision(action=ACTIONS[i], scores=scores)
+
+
+def _choose(p: np.ndarray, rng: np.random.Generator, eps: float) -> int:
+    """Sample an action index during data collection.
+
+    Greedy (argmax) collection is what collapses self-improvement: the policy
+    only ever logs its current best action, so the next fit has no counter-
+    examples for the other actions and narrows to a constant. We instead sample
+    from the softmax mixed with a uniform floor (epsilon), guaranteeing every
+    action keeps appearing in the traces. Eval still uses argmax.
+    """
+    uniform = np.ones(len(p)) / len(p)
+    mix = (1.0 - eps) * p + eps * uniform
+    mix = mix / mix.sum()
+    return int(rng.choice(len(p), p=mix))
 
 
 def _filter_traces(traces, keep_fraction: float):

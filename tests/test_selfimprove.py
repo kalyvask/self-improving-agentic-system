@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 
-from wdp.cost import Spend
+from wdp.cost import Spend, CostLedger
 from wdp.llm.openrouter import LLMResponse
-from wdp.executor.react import Executor, Task
+from wdp.executor.react import Executor, Task, Trajectory, Step
 from wdp.planner.decompose import Planner
 from wdp.verifier.scorer import LLMProcessVerifier, Score
 from wdp.loop import RunConfig, self_improve, format_curve
+from wdp.loop.runner import _features
+from wdp.loop.trace import DecisionRecord, TaskTrace, assign_credit
+from wdp.allocator.policy import NodeFeatures
 from wdp.benchmarks import ArithmeticBenchmark, safe_eval
 
 
@@ -93,3 +96,106 @@ def test_arithmetic_benchmark_offline():
     calc = b.tools()["calc"]
     assert calc(expr="2*(3+4)") == "14.0"
     assert safe_eval("2 * (3 + 4)") == 14.0
+
+
+def test_score_abstention_tracks_solvability():
+    b = ArithmeticBenchmark(n_atomic=1, n_multi=0, n_underspecified=1, seed=0)
+    tasks = b.tasks()
+    v = b.terminal_verifier()
+    under = next(t for t in tasks if t.metadata["kind"] == "underspecified")
+    atomic = next(t for t in tasks if t.metadata["kind"] == "atomic")
+    assert v.score_abstention(under).value == 1.0   # abstaining was right
+    assert v.score_abstention(atomic).value == 0.0  # gave up on a solvable task
+
+
+def _stop_trace(abstention_reward: float) -> TaskTrace:
+    tr = TaskTrace(task_id="t", currency="dollars", policy="bc",
+                   abstention_reward=abstention_reward)
+    tr.add(DecisionRecord(step=0, features=[0.0], action="stop",
+                          cost_before=0.0, cost_after=0.0))
+    return tr
+
+
+def _solved_trace(spend: float) -> TaskTrace:
+    tr = TaskTrace(task_id="t", currency="dollars", policy="bc",
+                   solved=True, terminal_reward=1.0,
+                   total_cost={"dollars": spend})
+    tr.add(DecisionRecord(step=0, features=[0.0], action="deeper",
+                          cost_before=0.0, cost_after=spend))
+    return tr
+
+
+def test_cheaper_solve_earns_higher_credit():
+    # The thesis fix: with a budget, an equally-correct but cheaper solve must
+    # earn strictly higher value-per-cost, so the learner becomes cost-aware
+    # instead of treating every solve as equally good.
+    cheap = _solved_trace(0.02)
+    pricey = _solved_trace(0.18)
+    assign_credit(cheap, budget=0.2)
+    assign_credit(pricey, budget=0.2)
+    assert cheap.decisions[0].value_per_cost > pricey.decisions[0].value_per_cost
+
+    # Without a budget the cost term is neutral (back-compat: pure outcome).
+    flat = _solved_trace(0.18)
+    assign_credit(flat)
+    assert flat.decisions[0].value_per_cost == 1.0
+
+
+def test_stop_credit_comes_from_abstention_reward():
+    # The bug we fixed: STOP must NOT be credited just because the task went
+    # unsolved. A premature stop (abstention_reward 0) earns 0; only a correct
+    # abstention (reward 1) earns credit.
+    wrong = _stop_trace(0.0)
+    assign_credit(wrong)
+    assert wrong.decisions[0].value_per_cost == 0.0
+
+    right = _stop_trace(1.0)
+    assign_credit(right)
+    assert right.decisions[0].value_per_cost == 1.0
+
+
+def _multi_trace(process_scores: list[float]) -> TaskTrace:
+    tr = TaskTrace(task_id="t", currency="dollars", policy="bc",
+                   solved=True, terminal_reward=1.0)
+    for i, ps in enumerate(process_scores):
+        tr.add(DecisionRecord(step=i, features=[0.0], action="deeper",
+                              cost_before=0.0, cost_after=0.0,
+                              process_score_after=ps))
+    return tr
+
+
+def test_advantage_weighting_credits_the_decision_that_moved_the_score():
+    # Lever #4: on a solved task, the decision that actually raised the process
+    # score should earn more credit than the one that did nothing. Here only the
+    # last decision moves the verifier signal (0.2 -> 0.2 -> 0.9).
+    tr = _multi_trace([0.2, 0.2, 0.9])
+    assign_credit(tr)  # no budget => efficiency neutral; isolates the advantage term
+    v = [d.value_per_cost for d in tr.decisions]
+    assert v[2] > v[0] > v[1]   # mover > set-up > the do-nothing middle step
+
+
+def test_advantage_weighting_falls_back_to_uniform_without_signal():
+    # When no decision moves the process score, credit collapses to uniform (the
+    # pre-lever behavior), so flat-signal traces stay well-behaved.
+    tr = _multi_trace([0.0, 0.0, 0.0])
+    assign_credit(tr)
+    v = [d.value_per_cost for d in tr.decisions]
+    assert v[0] == v[1] == v[2] == 1.0
+
+
+def test_structural_features_tool_error_and_done_frac():
+    # Lever #3: tool_error_rate and attempts_done_frac are computed for free from
+    # the trajectories. Two attempts, three steps, two of which errored; one
+    # attempt finished and one did not.
+    done = Trajectory(task_id="a", final_answer="done")
+    done.steps = [Step(thought="", observation="ERROR: bad tool"),
+                  Step(thought="", observation="ok result")]
+    truncated = Trajectory(task_id="a")
+    truncated.steps = [Step(thought="", observation="Error: env blew up")]
+
+    feats = _features([done, truncated], [0.5, 0.7], ledger=CostLedger(),
+                      cfg=RunConfig(budget=1.0), decomposability=0.0)
+    assert abs(feats.tool_error_rate - 2 / 3) < 1e-9
+    assert feats.attempts_done_frac == 0.5
+    # vector() and names() stay in lockstep so the policy auto-sizes.
+    assert len(feats.vector()) == len(NodeFeatures.names()) == 11

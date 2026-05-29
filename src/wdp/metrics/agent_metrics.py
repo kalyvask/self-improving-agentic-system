@@ -23,8 +23,13 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from wdp.loop.trace import TaskTrace
+if TYPE_CHECKING:
+    # Annotations only (this module is imported by wdp.loop, so a runtime import
+    # of wdp.loop.trace here would create a circular import). `from __future__
+    # import annotations` keeps the type references as strings, so this is enough.
+    from wdp.loop.trace import TaskTrace
 
 
 @dataclass

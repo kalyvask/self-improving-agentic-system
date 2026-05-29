@@ -19,7 +19,7 @@ import numpy as np
 
 from wdp.allocator.policy import Action, Allocator, Decision, NodeFeatures
 from wdp.allocator.linear import LinearSoftmaxPolicy
-from wdp.allocator.bc import ACTIONS, _INDEX, BCAllocator
+from wdp.allocator.bc import ACTIONS, _INDEX, BCAllocator, _choose
 
 # Feature indices used to bucket decisions into state-neighborhoods.
 _F = {n: i for i, n in enumerate(NodeFeatures.names())}
@@ -33,6 +33,7 @@ class DPOAllocator(Allocator):
         beta: float = 0.1,
         min_gap: float = 0.05,
         max_pairs: int = 5000,
+        explore_eps: float = 0.15,
         l2: float = 1e-3,
         lr: float = 0.2,
         epochs: int = 400,
@@ -42,6 +43,8 @@ class DPOAllocator(Allocator):
         self.beta = beta
         self.min_gap = min_gap
         self.max_pairs = max_pairs
+        self.explore_eps = explore_eps
+        self._rng = np.random.default_rng(seed)
         self._reference = BCAllocator(keep_fraction=keep_fraction, l2=l2, lr=lr,
                                       epochs=epochs, seed=seed)
         self._policy = LinearSoftmaxPolicy(
@@ -73,13 +76,13 @@ class DPOAllocator(Allocator):
         self._policy.fit_dpo(np.asarray(X), np.asarray(a_pref), np.asarray(a_rej),
                              reference=self._reference.policy, beta=self.beta)
 
-    def decide(self, feats: NodeFeatures, currency: str) -> Decision:
+    def decide(self, feats: NodeFeatures, currency: str, *, explore: bool = False) -> Decision:
         if not self._policy._fitted:
             raise RuntimeError("DPOAllocator.decide called before fit()")
         p = self._policy.probs(feats.vector())
         scores = {a: float(p[i]) for i, a in enumerate(ACTIONS)}
-        best_i = int(np.argmax(p))
-        return Decision(action=ACTIONS[best_i], scores=scores)
+        i = _choose(p, self._rng, self.explore_eps) if explore else int(np.argmax(p))
+        return Decision(action=ACTIONS[i], scores=scores)
 
 
 def _bucket_key(feat: list[float]) -> tuple:

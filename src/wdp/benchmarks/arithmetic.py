@@ -75,6 +75,16 @@ class ArithmeticVerifier:
             return Score(value=0.0, rationale="no number in answer")
         return Score(value=1.0 if abs(got - float(gold)) < 1e-6 else 0.0)
 
+    def score_abstention(self, task: Task) -> Score:
+        """Grade a STOP/abstention against ground-truth solvability. A correct
+        abstention (task has no checkable answer) scores 1.0; giving up on a
+        solvable task scores 0.0. This is the ground-truth signal assign_credit
+        needs to tell a right abstention from a premature one."""
+        unsolvable = task.metadata.get("gold") is None
+        return Score(value=1.0 if unsolvable else 0.0,
+                     rationale="correct abstention" if unsolvable
+                     else "gave up on a solvable task")
+
 
 class ArithmeticBenchmark:
     name = "arithmetic"

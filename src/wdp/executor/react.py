@@ -51,12 +51,20 @@ class Step:
 @dataclass
 class Trajectory:
     """An Executor attempt. `final_answer` is set once the loop terminates with a
-    answer; `stalled` marks a self-reported give-up (feeds executor_stalled)."""
+    answer; `stalled` marks a self-reported give-up (feeds executor_stalled).
+
+    `reward` is an optional ground-truth terminal score the attempt already knows
+    (used by env-graded benchmarks like tau-bench, where the reward comes from the
+    environment's DB state, not from grading a text answer). When set, the runner
+    trusts it instead of calling the TerminalVerifier. `env` is an opaque per-
+    attempt handle (e.g. a tau-bench Env) kept in memory only, never serialized."""
     task_id: str
     steps: list[Step] = field(default_factory=list)
     final_answer: str | None = None
     stalled: bool = False
     parallel_group: str | None = None
+    reward: float | None = None
+    env: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def done(self) -> bool:

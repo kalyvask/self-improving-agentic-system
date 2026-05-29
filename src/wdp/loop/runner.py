@@ -49,6 +49,13 @@ def _features(
     depth = max((t.depth for t in trajectories), default=0)
     steps = sum(t.depth for t in trajectories)
     stalled = 1.0 if trajectories and all(t.stalled for t in trajectories) else 0.0
+    # Structural signals, free from the trajectories we already hold.
+    all_steps = [s for t in trajectories for s in t.steps]
+    n_err = sum(1 for s in all_steps
+                if str(s.observation).strip().lower().startswith("error"))
+    tool_error_rate = n_err / len(all_steps) if all_steps else 0.0
+    n_done = sum(1 for t in trajectories if t.final_answer is not None)
+    attempts_done_frac = n_done / len(trajectories) if trajectories else 0.0
     return NodeFeatures(
         score_mean=float(statistics.fmean(scores)),
         score_max=float(max(scores)),
@@ -59,6 +66,8 @@ def _features(
         steps_taken=steps,
         decomposability=decomposability,
         executor_stalled=stalled,
+        tool_error_rate=tool_error_rate,
+        attempts_done_frac=attempts_done_frac,
     )
 
 
@@ -72,6 +81,8 @@ def run_task(
     planner: Planner | None = None,
     cfg: RunConfig | None = None,
     policy_name: str = "bandit",
+    explore: bool = False,
+    update: bool = True,
 ) -> TaskTrace:
     cfg = cfg or RunConfig()
     ledger = CostLedger()
@@ -79,7 +90,7 @@ def run_task(
 
     trajectories: list[Trajectory] = []
     process_scores: list[float] = []
-    decomposability = planner.probe(task, parallel_group=None) if planner else 0.0
+    decomposability = planner.probe(task, parallel_group=None, ledger=ledger) if planner else 0.0
 
     best_answer: str | None = None
     best_terminal = 0.0
@@ -87,7 +98,7 @@ def run_task(
     for step in range(cfg.max_decisions):
         feats = _features(trajectories, process_scores, ledger=ledger, cfg=cfg,
                            decomposability=decomposability)
-        decision = allocator.decide(feats, cfg.currency)
+        decision = allocator.decide(feats, cfg.currency, explore=explore)
         cost_before = ledger.amount(cfg.currency)
 
         if decision.action == Action.STOP:
@@ -123,11 +134,14 @@ def run_task(
         # Score whatever we just produced (cheap process verifier).
         ps = feats.score_max
         if new_traj is not None:
-            ps = verifier.score_step(task, new_traj.transcript()).value
+            ps = verifier.score_step(task, new_traj.transcript(), ledger=ledger).value
             process_scores.append(ps)
             # If it produced a final answer, get the ground-truth terminal score.
+            # Env-graded attempts (tau-bench) already carry their reward; trust it
+            # rather than re-grading a text answer that isn't the unit of success.
             if new_traj.final_answer is not None:
-                tv = terminal.score_final(task, new_traj.final_answer).value
+                tv = (new_traj.reward if new_traj.reward is not None
+                      else terminal.score_final(task, new_traj.final_answer).value)
                 if tv >= best_terminal:
                     best_terminal, best_answer = tv, new_traj.final_answer
 
@@ -140,16 +154,24 @@ def run_task(
             process_score_after=ps,
         ))
 
-        # Bandit online update (if the policy supports it).
-        _maybe_update(allocator, decision.action, ps, cost_before, cost_after)
+        # Bandit online update (if the policy supports it). Skipped at eval so
+        # the baseline isn't trained on the held-out tasks it's measured on.
+        if update:
+            _maybe_update(allocator, decision.action, ps, cost_before, cost_after)
 
         if best_terminal >= cfg.solved_threshold or cost_after >= cfg.budget:
             break
 
     trace.solved = best_terminal >= cfg.solved_threshold
     trace.terminal_reward = best_terminal
+    # Ground-truth quality of abstaining on this task (1.0 only if it was
+    # genuinely unsolvable). Verifiers without score_abstention default to 0.0,
+    # so STOP earns credit only on benchmarks that mark unsolvable tasks.
+    score_abstention = getattr(terminal, "score_abstention", None)
+    if not trace.solved and score_abstention is not None:
+        trace.abstention_reward = float(score_abstention(task).value)
     trace.total_cost = ledger.snapshot()
-    assign_credit(trace)
+    assign_credit(trace, budget=cfg.budget)
     return trace
 
 
@@ -165,7 +187,7 @@ def _run_decompose(task, planner, executor, ledger, parallel_group) -> Trajector
 
     Each topological layer runs as one parallel_group so the latency currency
     bills the layer's max, not its sum (SPRINT-style parallel sub-agents)."""
-    dag = planner.decompose(task, parallel_group=parallel_group)
+    dag = planner.decompose(task, parallel_group=parallel_group, ledger=ledger)
     if not dag.subtasks:
         return None
     answers: list[str] = []
@@ -202,13 +224,16 @@ def run_round(
     planner: Planner | None = None,
     cfg: RunConfig | None = None,
     policy_name: str = "bandit",
+    explore: bool = False,
+    update: bool = True,
     trace_log=None,
 ) -> list[TaskTrace]:
     """Run every task once; optionally append each trace to a TraceLog."""
     traces: list[TaskTrace] = []
     for task in tasks:
         tr = run_task(task, allocator, executor, verifier, terminal,
-                      planner=planner, cfg=cfg, policy_name=policy_name)
+                      planner=planner, cfg=cfg, policy_name=policy_name,
+                      explore=explore, update=update)
         traces.append(tr)
         if trace_log is not None:
             trace_log.append(tr)

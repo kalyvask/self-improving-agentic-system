@@ -54,6 +54,11 @@ class TaskTrace:
     decisions: list[DecisionRecord] = field(default_factory=list)
     solved: bool = False
     terminal_reward: float = 0.0
+    # Ground-truth quality of abstaining on this task: 1.0 if the task was
+    # genuinely unsolvable (STOP was the right call), 0.0 otherwise. Kept
+    # separate from terminal_reward so a correct abstention never retroactively
+    # credits the spend actions that ran before the STOP.
+    abstention_reward: float = 0.0
     total_cost: dict = field(default_factory=dict)   # full per-currency snapshot
     wall_started: float = field(default_factory=time.time)
 
@@ -90,29 +95,70 @@ class TraceLog:
         return traces
 
 
-def assign_credit(trace: TaskTrace, *, gamma: float = 1.0) -> None:
+def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
+                  budget: float | None = None,
+                  advantage_floor: float = 0.5) -> None:
     """Attach terminal reward + value-per-cost to each decision (in place).
 
-    We use the simplest defensible scheme: every spend decision on a solved task
-    shares the terminal reward, discounted toward the end of the trajectory, and
-    normalized by that decision's marginal cost so the credited quantity is
-    value-PER-COST (the thing the Allocator actually optimizes). STOP decisions
-    are credited by the *avoided* cost when the task was genuinely unsolvable --
-    i.e. a correct abstention scores well. This is intentionally close to STaR /
-    SWiRL outcome credit so the BC/DPO/GRPO comparison stays clean.
+    Spend decisions are credited by outcome *times* cost-efficiency *times* the
+    decision's own contribution, all in [0,1], so the Allocator is pushed toward
+    cheap solves rather than just any solve, and toward the *decisions that did
+    the work* rather than every decision on a winning task equally.
+
+      - outcome: `trace.terminal_reward`, the graded quality of the best answer
+        (not a binary solved flag, so a partial reward still trains).
+      - cost-efficiency: `1 - spent/budget`. A solve that used little of its
+        budget keeps almost all its reward; one that burned the whole budget keeps
+        almost none. Without a budget this term is 1.0 (old cost-blind behavior).
+      - contribution (advantage): how much this decision *raised the best process
+        score seen so far*. A WIDER that spun a dead-end attempt and a DEEPER that
+        finished the winner used to get identical credit on a solved task; now the
+        decision that moved the verifier signal earns more. We blend a uniform
+        floor (`advantage_floor`) with the normalized per-step advantage so set-up
+        moves still get partial credit and aren't zeroed. When no decision moved
+        the score (no process signal at all), this collapses to uniform weights --
+        i.e. the previous behavior -- so the mechanics tests still hold.
+
+    STOP decisions are credited by `trace.abstention_reward`, the ground-truth
+    quality of the abstention: 1.0 only when the task was genuinely unsolvable,
+    0.0 for a premature give-up. This is intentionally close to STaR / SWiRL
+    outcome credit so the BC/DPO/GRPO comparison stays clean.
     """
+    spent = (trace.total_cost or {}).get(trace.currency)
+    if spent is None:
+        spent = sum(rec.marginal_cost for rec in trace.decisions)
+    efficiency = 1.0
+    if budget and budget > 0:
+        efficiency = max(0.0, 1.0 - min(1.0, spent / budget))
+
+    # Per-step advantage = how much each decision raised the running-best process
+    # score. Only positive moves count (a decision can't be blamed for noise dips).
+    advantages: list[float] = []
+    best_so_far = 0.0
+    for rec in trace.decisions:
+        adv = max(0.0, rec.process_score_after - best_so_far)
+        advantages.append(adv)
+        best_so_far = max(best_so_far, rec.process_score_after)
+    total_adv = sum(advantages)
+
     n = len(trace.decisions)
     for i, rec in enumerate(trace.decisions):
         rec.terminal_reward = trace.terminal_reward
-        discount = gamma ** (n - 1 - i)
         if rec.action == Action.STOP.value:
-            # Reward a correct stop (unsolved & cheap-to-have-stopped) near 1; a
-            # premature stop on a solvable task is penalized via terminal_reward~0.
-            rec.value_per_cost = (1.0 - trace.terminal_reward) if not trace.solved else 0.0
+            # Credit STOP by whether abstaining was actually correct. Using the
+            # ground-truth abstention reward (not 1 - terminal_reward) stops the
+            # learner from treating every failed task as a good place to give up.
+            rec.value_per_cost = trace.abstention_reward
+            continue
+        discount = gamma ** (n - 1 - i)
+        if total_adv > 1e-9:
+            # contrib_i sums to 1 over the trace; * n makes the mean weight 1.0 so
+            # magnitudes stay comparable to the uniform scheme (a no-op on average).
+            contrib = advantage_floor / n + (1.0 - advantage_floor) * (advantages[i] / total_adv)
+            weight = contrib * n
         else:
-            mc = rec.marginal_cost or 1e-9
-            rec.value_per_cost = float(min(1.0, (discount * trace.terminal_reward) / mc)) \
-                if trace.solved else 0.0
+            weight = 1.0
+        rec.value_per_cost = float(min(1.0, discount * trace.terminal_reward * efficiency * weight))
 
 
 def feature_names() -> list[str]:

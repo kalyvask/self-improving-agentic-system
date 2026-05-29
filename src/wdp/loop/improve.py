@@ -56,22 +56,34 @@ def self_improve(
     cfg: RunConfig | None = None,
     keep_fraction: float = 0.3,
     seed: int | None = 0,
+    fit_window: int | None = None,
     trace_log=None,
 ) -> list[RoundReport]:
     cfg = cfg or RunConfig()
     accumulated: list[TaskTrace] = []
     reports: list[RoundReport] = []
 
+    def _fit_set() -> list[TaskTrace]:
+        # Fit on the most recent `fit_window` rounds of traces (on-policy-ish),
+        # or on everything when no window is set. A window stops stale round-0
+        # bandit traces from diluting a policy that has since moved on.
+        if not fit_window:
+            return accumulated
+        return accumulated[-fit_window * len(train_tasks):]
+
     def _eval(alloc, name) -> dict:
+        # Eval is greedy (explore=False): we measure the policy we would deploy,
+        # not the exploring data-collection policy.
         ev = run_round(eval_tasks, alloc, executor, verifier, terminal,
-                       planner=planner, cfg=cfg, policy_name=name)
+                       planner=planner, cfg=cfg, policy_name=name,
+                       explore=False, update=False)
         return summarize_round(ev, cfg.currency)
 
     # Round 0: bandit cold start.
     bandit = BanditAllocator(seed=seed)
     train_traces = run_round(train_tasks, bandit, executor, verifier, terminal,
                              planner=planner, cfg=cfg, policy_name="bandit",
-                             trace_log=trace_log)
+                             explore=True, trace_log=trace_log)
     accumulated += train_traces
     reports.append(RoundReport(
         round=0, policy="bandit",
@@ -83,10 +95,10 @@ def self_improve(
     # Rounds 1..R: refit the learner on accumulated traces, collect, evaluate.
     for r in range(1, rounds + 1):
         alloc = _make_learner(learner, keep_fraction, seed)
-        alloc.fit(accumulated)
+        alloc.fit(_fit_set())
         train_traces = run_round(train_tasks, alloc, executor, verifier, terminal,
                                  planner=planner, cfg=cfg, policy_name=learner,
-                                 trace_log=trace_log)
+                                 explore=True, trace_log=trace_log)
         accumulated += train_traces
         reports.append(RoundReport(
             round=r, policy=learner,
