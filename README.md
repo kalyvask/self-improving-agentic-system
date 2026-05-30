@@ -135,11 +135,47 @@ runs all of this offline on collected traces.
 
 ## Results
 
-The evaluation harness above is in place; the headline numbers and graphs come
-from a powered run that is being collected now (a calibrated arithmetic sweep
-across the three learners, compared on paired cost). This section will be updated
-with the curve, the cost intervals, and the difficulty and verifier diagnostics
-once that run completes.
+Powered arithmetic sweep, 110 tasks (66 train / 44 eval), budget calibrated to
+~2x the median task cost so the cost signal is active. Round 3 (final) eval:
+
+| policy | solve | mean cost | notes |
+|--------|-------|-----------|-------|
+| bandit (round 0) | ~0.78 | ~0.0023 | Thompson cold start |
+| BC   | 0.82 | ~0.0022 | clones the bandit; flat by design |
+| DPO  | 0.82 | ~0.0022 | stable, robust across rounds |
+| KTO  | 0.80 | ~0.0023 | stable after the credit fixes below |
+| GRPO | 0.80 then collapses | -- | holds ~6 steps, then drifts (see below) |
+
+The honest finding is about **objective robustness and what breaks it**, not a
+single best learner. At n=44 the binary solve-rate differences are within noise
+(minimum detectable effect ~+0.24); the learners sit together around 0.80-0.82 and
+no learner yet shows a *resolved* cheaper-at-equal-solve win on this benchmark,
+because one WIDER attempt already solves most tasks (thin allocation headroom).
+
+What the sweep did surface, and what most of the work was, is a family of
+**normalization / credit bugs that caused apparent "collapses"** -- each found by
+asking why a result that should not happen did:
+
+- **Cost-credit cap-flattening:** `min(1, spent/budget)` gave every over-budget
+  trace the same credit, erasing the gradient against runaway spend.
+- **KTO double-beta:** the implicit-reward sigmoid argument was scaled by beta
+  twice, disabling KTO's saturation so probability mass drained onto STOP.
+- **GRPO std-normalization:** dividing the group-relative advantage by a tiny
+  all-solve-group std amplified cost jitter over the real solve/fail signal
+  (fixed via Dr. GRPO mean-centering).
+- **Abstention-credit asymmetry:** a correct abstention scored the maximum 1.0
+  while a cost-discounted solve scored ~0.7, so abstaining looked better than
+  solving; correct-STOP examples then dominated the value-weighted clone and the
+  controller drifted to STOP. Fixed by scaling abstention credit below the solve
+  scale.
+
+After these fixes BC/DPO/KTO are stable and competitive. GRPO is the remaining
+open case: the std fix roughly doubled its time-to-collapse but it still drifts to
+a single cheap action, because a sharp per-rollout cost reward suppresses the
+necessary-but-expensive action (DECOMPOSE) on the very tasks that need it, and
+67% of its groups carry no outcome signal. The next step is DAPO-style dynamic
+sampling (learn only from outcome-varying groups) plus a softer cost term. Curves
+and cost-interval graphs will be added as figures.
 
 ## Layout
 

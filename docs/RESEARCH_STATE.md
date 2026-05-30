@@ -88,21 +88,23 @@ Per spend decision: `value_per_cost = terminal_reward * cost_efficiency * advant
 
 Same data, same policy core, same BC reference; only the learning objective differs.
 
-| objective | behavior | solve | cost vs bandit | verdict |
-|---|---|---|---|---|
-| **BC**   | clones the bandit            | 0.82 | ~equal | flat, stable; cloning can't exceed its data |
-| **DPO**  | balanced (pairwise, bucketed) | 0.82 | no resolved change | **robust** — never collapses |
-| **KTO**  | → STOP (abstain)             | 0.55 (collapsed) | resolved cheaper | collapses; see bug #2 + open problem |
-| **GRPO** | → WIDER (one cheap try)      | 0.55 (collapsed) | resolved cheaper | collapsed via bug #3; re-run pending |
+| objective | behavior (round 3 eval) | solve | verdict |
+|---|---|---|---|
+| **BC**   | clones the bandit             | 0.82 | flat, stable; cloning can't exceed its data |
+| **DPO**  | balanced (pairwise, bucketed) | 0.82 | **robust** — never collapses |
+| **KTO**  | stable after credit fixes     | 0.80 | **FIXED** (was collapsing to 0.55; bugs #2 + #4) |
+| **GRPO** | holds ~6 steps then drifts to WIDER | 0.84→0.52 | std fix #3 PARTIAL; still collapses, needs dynamic sampling |
 
 Note the powered eval is still underpowered for binary solve rate (minimum detectable
 effect at n=44 is ~+0.24); **paired per-task COST is the metric with power**. Reported
 cost deltas use a paired bootstrap CI; solve uses Wilson intervals.
 
-**Honest current state: no learner yet shows a clean "cheaper at equal solve" win that
-resolves.** BC is flat. DPO is a tie. KTO and GRPO collapsed (bugs now fixed; re-runs
-pending). The KTO round-1/2 policy DID show 0.82 solve at ~20% lower cost before its
-round-3 collapse — the closest thing to the thesis win we have.
+**Honest current state:** after fixing four normalization/credit bugs (below), BC, DPO,
+and KTO are stable and competitive (~0.80-0.82), and the "collapses" we first saw were
+bugs, not objective limitations. No learner yet shows a *resolved* cheaper-at-equal-solve
+win, because one WIDER attempt already solves most arithmetic tasks (thin headroom). GRPO
+remains the open case: the std fix doubled its time-to-collapse but it still drifts to
+WIDER (see §3 bug #3 note + the residual-mechanism finding in §5 P6).
 
 ---
 
@@ -201,10 +203,26 @@ correlation with outcome/cost is weak and inconsistent. Tied to P1.
 Even the 110-task arithmetic suite gives MDE ~+0.24 on solve. We lean on cost + IRT-chosen
 informative tasks, but a clean solve-rate claim would need many more tasks/arm.
 
-### P6. GRPO KL-anchor strength and on-policy stability
-beta_kl=0.05 was too weak to prevent the (now-fixed) collapse; even with the std fix, the
-right KL strength / number of steps / group size is untuned. DAPO's tricks (dynamic
-sampling, clip-higher) likely apply (see §6 — RL agent).
+### P6. GRPO still collapses after the std fix — OPEN (mechanism verified)
+The Dr. GRPO std fix (#3) roughly doubled time-to-collapse (held 0.80-0.86 through step 6,
+vs broken collapsing by step 5) but GRPO still drifts to WIDER (0.86) and craters to 0.52
+by step 8-10. Verified on the fixed-probe traces:
+- 67% of groups carry NO outcome signal (76 all-solve + 31 all-fail of 160).
+- Net mean-centered advantage: STOP -0.295 and DECOMPOSE -0.150 are strongly suppressed;
+  DEEPER +0.045 and WIDER +0.016 are mildly up. So GRPO isn't preferring WIDER over DEEPER
+  directly -- it SUPPRESSES STOP and DECOMPOSE, and the freed mass flows to the
+  BC-warm-start-dominant WIDER.
+- In all-solve groups the cheapest winning rollout is WIDER 69x vs DECOMPOSE/DEEPER -- so on
+  a multi-part task that several actions solved, the cost term hands the win to cheap WIDER
+  and suppresses the DECOMPOSE that is actually NECESSARY on the hard multi-part tasks ->
+  solve craters there.
+**Root cause (the through-line across all four learners):** a sharp per-rollout COST term
+over-penalizes the necessary-but-expensive action (DECOMPOSE for GRPO, STOP credit for KTO),
+and each objective amplifies it differently; on a thin-headroom benchmark this yields a
+degenerate single-action policy. **Fixes:** (a) DAPO dynamic sampling -- drop all-same-outcome
+groups so only real solve/fail signal trains (removes the cost-only suppression in all-solve
+groups); (b) softer cost term (lower cost_weight, now a CLI knob) so cost shapes but does not
+dominate outcome; (c) clip-higher / KL-anchor tuning as secondary insurance.
 
 ---
 
