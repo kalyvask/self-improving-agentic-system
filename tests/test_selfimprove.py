@@ -189,9 +189,12 @@ def test_grpo_train_runs_with_fake_stack():
     cfg = RunConfig(max_decisions=3)
     seed = run_round(train, BanditAllocator(seed=0), ex, vf, tm, planner=pl,
                      cfg=cfg, policy_name="bandit", explore=True)
+    # dynamic_sampling off here: the fake stack always solves, so every group is
+    # all-solve and would be skipped; off keeps the update path exercised.
     reports, alloc = grpo_train(
         seed, train, eval_, ex, vf, tm, planner=pl, cfg=cfg,
-        group_size=2, prompts_per_step=2, num_steps=2, eval_every=1, seed=0)
+        group_size=2, prompts_per_step=2, num_steps=2, eval_every=1, seed=0,
+        dynamic_sampling=False)
     assert reports[0].step == 0 and reports[-1].step == 2
     assert reports[-1].n_rollouts == 2 * 2 * 2          # steps*prompts*group
     for r in reports:

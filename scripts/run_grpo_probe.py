@@ -48,6 +48,9 @@ def main() -> None:
     ap.add_argument("--inner-epochs", type=int, default=5)
     ap.add_argument("--beta-kl", type=float, default=0.05)
     ap.add_argument("--cost-weight", type=float, default=0.5)
+    ap.add_argument("--no-dynamic-sampling", action="store_true",
+                    help="disable DAPO dynamic sampling (default: on -- skip all-same-"
+                         "outcome groups so cost jitter can't drive collapse)")
     ap.add_argument("--eval-every", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="traces/grpo_probe.jsonl")
@@ -86,6 +89,7 @@ def main() -> None:
             prompts_per_step=args.prompts_per_step, num_steps=args.num_steps,
             inner_epochs=args.inner_epochs, beta_kl=args.beta_kl,
             cost_weight=args.cost_weight, eval_every=args.eval_every,
+            dynamic_sampling=not args.no_dynamic_sampling,
             seed=args.seed, trace_log=TraceLog(args.out),
         )
 

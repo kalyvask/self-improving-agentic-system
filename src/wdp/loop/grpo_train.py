@@ -58,6 +58,7 @@ def grpo_train(
     inner_epochs: int = 5,
     beta_kl: float = 0.05,
     cost_weight: float = 0.5,
+    dynamic_sampling: bool = True,
     eval_every: int = 10,
     seed: int = 0,
     trace_log=None,
@@ -88,6 +89,7 @@ def grpo_train(
             prompts = [rng.choice(train_tasks) for _ in range(prompts_per_step)]
 
         X, actions, advs = [], [], []
+        kept_groups = 0
         for task in prompts:
             group = [run_task(task, alloc, executor, verifier, terminal,
                               planner=planner, cfg=cfg, policy_name="grpo",
@@ -97,6 +99,17 @@ def grpo_train(
             if trace_log is not None:
                 for t in group:
                     trace_log.append(t)
+            # DAPO dynamic sampling (arXiv:2503.14476): a group whose rollouts ALL
+            # solve or ALL fail carries no outcome signal -- its only within-group
+            # variation is cost jitter, which (even mean-centered) imparts a small
+            # but consistent pull toward the cheapest action and suppresses the
+            # necessary-but-expensive one (DECOMPOSE), collapsing the policy. Skip
+            # those groups so only outcome-varying groups train; the surviving
+            # mixed groups still carry cost signal via the reward magnitude.
+            solved = [1 if (t.solved or t.terminal_reward >= 0.99) else 0 for t in group]
+            if dynamic_sampling and (sum(solved) == 0 or sum(solved) == len(group)):
+                continue
+            kept_groups += 1
             R = [_rollout_reward(t, cfg.budget, cost_weight) for t in group]
             mean = sum(R) / len(R)
             # Advantage is mean-centered only -- NOT divided by the group std.
