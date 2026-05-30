@@ -99,7 +99,8 @@ class TraceLog:
 def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
                   budget: float | None = None,
                   advantage_floor: float = 0.5,
-                  cost_weight: float = 0.5) -> None:
+                  cost_weight: float = 0.5,
+                  abstention_credit: float = 0.5) -> None:
     """Attach terminal reward + value-per-cost to each decision (in place).
 
     Spend decisions are credited by outcome *times* cost-efficiency *times* the
@@ -130,10 +131,18 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
         the score (no process signal at all), this collapses to uniform weights --
         i.e. the previous behavior -- so the mechanics tests still hold.
 
-    STOP decisions are credited by `trace.abstention_reward`, the ground-truth
-    quality of the abstention: 1.0 only when the task was genuinely unsolvable,
-    0.0 for a premature give-up. This is intentionally close to STaR / SWiRL
-    outcome credit so the BC/DPO/GRPO comparison stays clean.
+    STOP decisions are credited by `abstention_credit * trace.abstention_reward`:
+    the ground-truth quality of the abstention (1.0 only when the task was genuinely
+    unsolvable, 0.0 for a premature give-up), scaled DOWN by `abstention_credit`
+    (default 0.5) so a correct abstention is worth less than a correct solve. This
+    matters because a correct solve is cost-discounted to ~0.6-0.8 while an
+    un-scaled correct STOP would be the maximum 1.0 -- making abstaining look
+    *better* than solving. That asymmetry let STOP become the single
+    highest-weighted example in the BC reference's value-weighted clone, which
+    every learner (and the warm-started KTO/GRPO policies) then inherited, drifting
+    the whole controller toward STOP across self-improvement rounds. Scaling
+    abstention below the solve scale keeps the abstention arm useful (a correct STOP
+    still beats a premature one and beats failing) without letting it dominate.
     """
     spent = (trace.total_cost or {}).get(trace.currency)
     if spent is None:
@@ -156,10 +165,11 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
     for i, rec in enumerate(trace.decisions):
         rec.terminal_reward = trace.terminal_reward
         if rec.action == Action.STOP.value:
-            # Credit STOP by whether abstaining was actually correct. Using the
-            # ground-truth abstention reward (not 1 - terminal_reward) stops the
-            # learner from treating every failed task as a good place to give up.
-            rec.value_per_cost = trace.abstention_reward
+            # Credit STOP by whether abstaining was actually correct (ground-truth
+            # abstention reward, not 1 - terminal_reward, so a failed task isn't a
+            # good place to give up), scaled below the solve scale so a correct
+            # abstention can't out-value an actual solve and dominate the clone.
+            rec.value_per_cost = abstention_credit * trace.abstention_reward
             continue
         discount = gamma ** (n - 1 - i)
         if total_adv > 1e-9:

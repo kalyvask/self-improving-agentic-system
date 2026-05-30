@@ -288,9 +288,16 @@ def test_stop_credit_comes_from_abstention_reward():
     assign_credit(wrong)
     assert wrong.decisions[0].value_per_cost == 0.0
 
+    # A correct abstention earns positive credit, but SCALED below a solve
+    # (abstention_credit=0.5) so it can't out-value actually solving the task --
+    # the asymmetry that drove the controller to drift toward STOP across rounds.
     right = _stop_trace(1.0)
     assign_credit(right)
-    assert right.decisions[0].value_per_cost == 1.0
+    assert right.decisions[0].value_per_cost == 0.5
+    # A correct, reasonably cheap solve must out-value a correct abstention.
+    solve = _solved_trace(0.02)
+    assign_credit(solve, budget=0.2)
+    assert solve.decisions[0].value_per_cost > right.decisions[0].value_per_cost
 
 
 def _multi_trace(process_scores: list[float]) -> TaskTrace:
