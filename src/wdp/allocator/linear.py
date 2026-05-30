@@ -124,10 +124,12 @@ class LinearSoftmaxPolicy:
         For example (x, a) with implicit reward
             r = beta * (logp_theta(a|x) - logp_ref(a|x))
         and a batch KL baseline z = clamp(mean_batch(r_detached), min=0):
-            desirable:   L = lambda_d * (1 - sigmoid(beta*(r - z)))
-            undesirable: L = lambda_u * (1 - sigmoid(beta*(z - r)))
-        Gradients flow through logp_theta(a|x) only (z is detached, recomputed per
-        epoch). We warm-start from the reference and share its scaler, like DPO, so
+            desirable:   L = lambda_d * (1 - sigmoid(r - z))
+            undesirable: L = lambda_u * (1 - sigmoid(z - r))
+        The sigmoid argument is (r - z): r already carries beta, so it must NOT be
+        scaled by beta again. Gradients flow through logp_theta(a|x) only (z is
+        detached, recomputed per epoch). We warm-start from the reference and share
+        its scaler, like DPO, so
         the implicit-reward anchoring is meaningful and the BC/DPO/KTO comparison
         stays on equal footing (same model, same features, same reference)."""
         X = np.atleast_2d(X).astype(np.float64)
@@ -150,13 +152,20 @@ class LinearSoftmaxPolicy:
             r = beta * (logp[idx, actions] - ref_logp_a)        # implicit reward
             z = max(0.0, float(r.mean()))                       # detached KL baseline
 
-            # dL/dr per example (z held constant this step).
-            u = beta * (r - z)
-            v = beta * (z - r)
+            # KTO value v = sigmoid(arg) with arg = (r - z). r ALREADY carries
+            # beta, so the argument must not be scaled by beta again. The earlier
+            # beta*(r - z) made arg ~ beta^2*logratio, pinned near 0, so sigmoid
+            # stayed ~0.5 for every example and never saturated -- gradients became
+            # a constant per-example push that never turned off, draining mass from
+            # down-weighted undesirable spends onto the rarely-used STOP action and
+            # collapsing the policy. With (r - z) the term saturates once an example
+            # is on the correct side of the baseline, as KTO intends.
+            u = r - z
+            v = z - r
             dL_dr = np.where(
                 desirable,
-                -lambda_d * beta * _sigmoid(u) * _sigmoid(-u),
-                +lambda_u * beta * _sigmoid(v) * _sigmoid(-v),
+                -lambda_d * _sigmoid(u) * _sigmoid(-u),
+                +lambda_u * _sigmoid(v) * _sigmoid(-v),
             )
             # dr/dlogit_k = beta * ([k==a] - p_k); chain through dL/dr.
             g = -p * (dL_dr * beta)[:, None]                    # (n, A), the -p_k term

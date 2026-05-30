@@ -117,6 +117,39 @@ def test_kto_prefers_desirable_action_over_reference():
     assert p[d] < ref[d]   # undesirable action loses it
 
 
+def test_kto_does_not_inflate_a_mostly_undesirable_action():
+    # Regression for the double-beta bug: the sigmoid argument must be (r - z), not
+    # beta*(r - z). With the extra beta the argument pinned near 0, sigmoid never
+    # saturated, and constant per-example gradients drained probability from
+    # down-weighted undesirable spends onto the rarely-used STOP action -- which
+    # collapsed the live policy to ~50% STOP. A mostly-undesirable action must NOT
+    # gain probability over the reference.
+    import numpy as np
+    from wdp.allocator.linear import LinearSoftmaxPolicy
+    from wdp.allocator.bc import _INDEX
+    from wdp.allocator.policy import Action, NodeFeatures
+
+    F = len(NodeFeatures.names())
+    feats = [1.0] + [0.0] * (F - 1)
+    w, d, s = (_INDEX[Action.WIDER.value], _INDEX[Action.DEEPER.value],
+               _INDEX[Action.STOP.value])
+    ref = LinearSoftmaxPolicy(n_features=F, n_actions=4, seed=0)
+    ref.fit_bc(np.array([feats] * 3), np.array([w, d, d]))      # STOP rare in ref
+    pol = LinearSoftmaxPolicy(n_features=F, n_actions=4, seed=0)
+    pol.mu, pol.sigma = ref.mu.copy(), ref.sigma.copy()
+    pol.W, pol.b = ref.W.copy(), ref.b.copy()
+
+    # 12 desirable DEEPER, 8 undesirable STOP (premature). KTO must push STOP down.
+    X = np.array([feats] * 20)
+    actions = np.array([d] * 12 + [s] * 8)
+    desirable = np.array([True] * 12 + [False] * 8)
+    pol.fit_kto(X, actions, desirable, reference=ref, beta=0.1)
+    p, p_ref = pol.probs(np.array(feats)), ref.probs(np.array(feats))
+    assert p[s] <= p_ref[s] + 1e-3          # mostly-undesirable STOP not inflated
+    assert p[s] < 0.2                        # nowhere near the ~0.5 collapse
+    assert p[d] > p_ref[d]                   # desirable action still gains
+
+
 def test_grpo_update_shifts_probability_toward_high_advantage_action():
     # One fixed state. WIDER rollouts get positive group-relative advantage,
     # DEEPER rollouts negative. A GRPO update must raise p(WIDER) and lower
