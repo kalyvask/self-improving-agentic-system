@@ -16,6 +16,68 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 
 ---
 
+## Current status (as of last commit 20220a8)
+
+- **All 8 bugs fixed and committed; 47 offline tests pass.** Latest commits: cae1958 (DECOMPOSE
+  synthesis + 4), 9c67b3b (utility/solvable metrics + eval-trace logging), 20220a8 (decomposability
+  + verifier + eval round id). Math-Shepherd rollout-difficulty built and gated (b02d392).
+- **A decisive arithmetic sweep is RUNNING** (bg id may be stale): bc/dpo/kto, 110 tasks,
+  budget 0.003, escalation OFF, no --rollout-difficulty, outputs `traces/calib2_{bc,dpo,kto}.jsonl`
+  (+ `_eval.jsonl`). Re-run via `scripts/run_selfimprove.py ... --out traces/calib2_<L>.jsonl`.
+  It is the first run where DECOMPOSE can actually solve multi-part tasks AND the policy has a
+  separable decomposability feature. **When it lands, check:** does DECOMPOSE now SOLVE multi
+  tasks (was 0)? does DECOMPOSE usage rise by task kind? solvable_solve_rate / utility_rate;
+  paired eval cost (on the `_eval.jsonl` traces) vs the pre-fix `calib_*` sweep.
+- **Escalation (ESCALATE to Opus) is deliberately DEFERRED** (task #54) until we see whether the
+  fixes alone move the frontier. It is the planned capstone (step 4); then tau-bench (step 5).
+- **Deferred/known-open:** STOP barely explored (bandit threshold too strict; ~9% abstention
+  arm); rollout-difficulty would mis-bill on eval if enabled (precompute + report separately).
+- **Expected shape of the result:** likely "up and to the right" first (DECOMPOSE usable ->
+  more multi solves, more cost), then DPO/KTO should learn WHEN decompose is worth it and bend
+  the frontier back left. A flat-but-correct result is still possible; report honestly.
+
+## 0. Lessons learned / mistakes to avoid (READ FIRST)
+
+Hard-won, from finding ~8 real bugs. Most "the learner is bad / the design is weak"
+conclusions turned out to be BUGS. Patterns to apply next time:
+
+- **A result that "shouldn't happen" is a bug signal, not a finding.** Every collapse we
+  saw (KTO->STOP, GRPO->WIDER, DECOMPOSE never solving) was a bug, not an objective
+  limitation. If an optimizer moves to *lower* reward, or an action *never* succeeds, dig
+  before theorizing. The user's "that doesn't make sense" caught 4+ bugs.
+- **Verify each ACTION can succeed end-to-end before blaming the policy.** DECOMPOSE solved
+  0 tasks for a structural reason: `_run_decompose` concatenated sub-answers and the
+  verifier read the last number, so it could never produce the parent sum. The learner
+  correctly suppressed a broken action. Check the mechanics of every arm.
+- **Features must be SEPARABLE or no learner can use them.** The decomposability probe rated
+  atomic 1.0 and multi 0.83 -- inseparable, so the policy could not learn "decompose multi."
+  A miscalibrated feature silently caps everything downstream.
+- **The cheap LLM signals are near-noise; prefer exact/free signals.** The process verifier
+  fails the alt-test (0.60 vs 0.69) and rated unsolvable tasks 0.95 while terminal=0. Use the
+  exact terminal grade as the process score whenever a trajectory is complete; only fall back
+  to the LLM for genuinely partial work.
+- **The credit chain has four interacting invariants -- keep all of them:**
+  (a) budget must be ~2x the median task cost or the cost term is inert;
+  (b) cost-efficiency must keep discriminating past budget (exp decay, not a capped linear);
+  (c) a correct abstention must be worth LESS than a solve (abstention_credit < solve_floor);
+  (d) a necessary-but-expensive solve must stay above the abstention/threshold (solve_floor).
+  Violating any one silently teaches "cheap mediocre beats necessary expensive."
+- **Normalization bugs hide in plain sight.** KTO double-beta (sigmoid arg scaled by beta
+  twice) and GRPO std-division (amplified cost-jitter in all-solve groups) both inverted the
+  optimization. When in doubt, dump the per-example gradient/advantage sign by group.
+- **Small evals can't resolve small wins.** n<=44 has MDE ~+0.24 on solve rate. Report COST
+  (paired bootstrap) + Wilson/McNemar; never headline a raw solve-rate delta.
+- **Don't spend on a sweep over a known-broken setup.** Validate fixes offline on existing
+  traces first (recompute credit, refit, check the property), THEN spend.
+- **On-policy GRPO does not learn at this scale** (tiny linear policy, ~5 informative groups
+  /step, flat reward). DPO (offline, pairwise) is the robust learner. Don't keep tuning GRPO.
+- **Cost/measurement hygiene:** bill every probe (rollout difficulty -> separate labeling
+  ledger, not invisible); persist eval traces (not just train) and tag them by round; don't
+  copy parent gold into subtasks; mask unavailable actions (DECOMPOSE with no planner is a
+  logged no-op). Each of these silently corrupts the solve/cost matrix.
+- **Process note:** do not run two agents on the same working copy -- it caused churn and a
+  red test. One editor at a time; commit/push frequently; never `git -c` the global config.
+
 ## 1. What the system is
 
 A **self-improving, cost-aware compute-allocation controller** ("the Allocator"). On a
@@ -207,6 +269,24 @@ capability lever (escalation) and a trustworthy training signal -- and there is 
    not the STOP count. Fix: scale STOP credit by `abstention_credit=0.5` so a correct
    abstention can't out-value a solve. Offline: BC P(STOP) 0.47->0.004, KTO 0.51->0.002.
    This is the true root of the "KTO round-3 collapse" (supersedes the P2 hypothesis below).
+
+6. **DECOMPOSE could never solve a multi-part task** (`cae1958`). `_run_decompose` set the
+   parent answer to the CONCATENATION of sub-answers, so the verifier graded the last number
+   (20, not the sum 26). DECOMPOSE solved 0 tasks across every calibrated run -> learners
+   correctly suppressed it -> multi-task headroom never appeared. Fix: a synthesis pass
+   combines sub-results into the parent answer. **Likely the main flat-frontier cause.**
+   (Shipped with: mask DECOMPOSE when planner=None; rollout-difficulty -> separate labeling
+   ledger; drop parent gold from subtask metadata; solve_floor + ordering guard.)
+7. **Decomposability feature miscalibrated** (`20220a8`). The cheap-LLM probe saturated near
+   1.0, rating atomic single-expression tasks 1.0 and multi 0.83 -- inseparable, so the policy
+   could not condition DECOMPOSE on task type. Fix: benchmark supplies a structural
+   decomposability in metadata (atomic 0 / multi graded 0.25-1.0 by part count / underspec 0);
+   planner.probe uses it when present (also drops the LLM probe cost on arithmetic).
+8. **Noisy process verifier used even when exact grading was free** (`20220a8`). The LLM scorer
+   rated unsolvable tasks 0.95 while terminal=0, corrupting the score features and wasting
+   spend. Fix: for a COMPLETED trajectory use the exact terminal grade as the process score;
+   LLM scorer only for genuinely partial work. Also added eval-trace round tags (name@rN) and
+   utility_rate / solvable_solve_rate metrics.
 
 Earlier fixes (pre-this-session): cost-credit normalization, billing verifier+planner into
 the ledger, freezing the bandit during eval, fixing inverted STOP credit, fixing greedy
