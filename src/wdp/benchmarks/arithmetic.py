@@ -108,24 +108,38 @@ class ArithmeticBenchmark:
         rng = random.Random(self.seed)
         out: list[Task] = []
 
+        # Atomic tasks span a difficulty gradient (tier 0-2): a flat eval looks the
+        # same at every difficulty and tells the WIDER-vs-DEEPER split nothing, so
+        # we vary nesting depth. Tier rises with i so a large suite is graded, not
+        # uniform. Only +,-,* keep golds exact integers (no rounding ambiguity).
         for i in range(self.n_atomic):
-            a, b, c = (rng.randint(2, 20) for _ in range(3))
-            expr = f"{a} * ({b} + {c})"
+            r = lambda: rng.randint(2, 20)
+            tier = i % 3
+            if tier == 0:                                   # easy: one operation
+                expr = rng.choice([f"{r()} + {r()}", f"{r()} * {r()}"])
+            elif tier == 1:                                 # medium: one nesting
+                expr = f"{r()} * ({r()} + {r()})"
+            else:                                           # hard: deeper nesting
+                expr = f"({r()} + {r()}) * ({r()} - {r()}) + {r()}"
             out.append(Task(
                 id=f"atomic-{i}",
                 prompt=f"Compute {expr}. Use the calc tool, then FINISH with the integer.",
-                metadata={"gold": safe_eval(expr), "kind": "atomic"},
+                metadata={"gold": safe_eval(expr), "kind": "atomic", "tier": tier},
             ))
 
+        # Multi-part tasks vary in how many sub-results must be combined (2-4), so
+        # DECOMPOSE has a real, graded payoff that grows with the part count.
         for i in range(self.n_multi):
-            a, b, c, d = (rng.randint(2, 15) for _ in range(4))
-            e1, e2 = f"{a} * {b}", f"{c} * {d}"
-            gold = safe_eval(f"({e1}) + ({e2})")
+            n_parts = 2 + (i % 3)                           # 2, 3, or 4 parts
+            parts = [f"{rng.randint(2, 15)} * {rng.randint(2, 15)}"
+                     for _ in range(n_parts)]
+            gold = safe_eval(" + ".join(f"({p})" for p in parts))
+            steps = "; ".join(f"compute {p}" for p in parts)
             out.append(Task(
                 id=f"multi-{i}",
-                prompt=(f"First compute {e1}. Separately compute {e2}. "
-                        f"Then FINISH with the sum of the two results."),
-                metadata={"gold": gold, "kind": "multi"},
+                prompt=(f"Separately {steps}. Then FINISH with the sum of all "
+                        f"{n_parts} results."),
+                metadata={"gold": gold, "kind": "multi", "n_parts": n_parts},
             ))
 
         for i in range(self.n_underspecified):
