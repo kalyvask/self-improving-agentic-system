@@ -174,8 +174,32 @@ open case: the std fix roughly doubled its time-to-collapse but it still drifts 
 a single cheap action, because a sharp per-rollout cost reward suppresses the
 necessary-but-expensive action (DECOMPOSE) on the very tasks that need it, and
 67% of its groups carry no outcome signal. The next step is DAPO-style dynamic
-sampling (learn only from outcome-varying groups) plus a softer cost term. Curves
-and cost-interval graphs will be added as figures.
+sampling (learn only from outcome-varying groups) plus a softer cost term.
+
+### Figures
+
+Generated offline from the collected traces and run logs (`python scripts/make_figures.py`).
+
+![Self-improvement curves](artifacts/self_improvement_curves.png)
+*Solve rate and mean cost per round on the 44-task eval (post-fix). BC, DPO, and KTO
+sit together near 0.80-0.82; the differences are within noise at this sample size,
+and one WIDER attempt already solves most current tasks (thin headroom).*
+
+![Collapse and fix](artifacts/collapse_and_fix.png)
+*The apparent "collapses" were bugs. Left: GRPO still slides to ~0.52 even with the
+std-normalization fix (the fix only delays it; dynamic sampling is the remaining
+step). Right: KTO's round-3 collapse is fully resolved by the abstention-credit fix.*
+
+![Action-mix drift](artifacts/action_mix_drift.png)
+*How each bug was caught: action-mix drift. The buggy KTO drifts to STOP across
+rounds; the std-fixed GRPO still drifts to WIDER. One action taking over is the
+collapse signature, and it is what localized every fix.*
+
+![Measurement CIs](artifacts/measurement_cis.png)
+*Measurement rigor. Per-arm solve (Wilson) and cost (bootstrap) 95% intervals on the
+training-collection traces. They overlap heavily, so no learner shows a resolved win;
+cost is the lower-variance metric. (Training-collection rates run below the greedy
+eval curve above because collection explores.)*
 
 ## Layout
 
