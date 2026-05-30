@@ -82,6 +82,9 @@ def main() -> None:
                          "spends extra forked-attempt credits, cached per task")
     ap.add_argument("--diff-rollouts", type=int, default=4,
                     help="number of forked attempts per task for rollout difficulty")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="truncate pre-existing trace outputs instead of refusing (append "
+                         "to existing files is a contamination footgun)")
     # Arithmetic-suite knobs.
     ap.add_argument("--atomic", type=int, default=8)
     ap.add_argument("--multi", type=int, default=6)
@@ -114,6 +117,16 @@ def main() -> None:
                         cost_weight=args.cost_weight,
                         abstention_credit=args.abstention_credit)
     out = args.out or str(Path(cfg["paths"]["traces"]) / "traces.jsonl")
+    # Append-only TraceLog is a contamination footgun: a re-run silently appends to
+    # (or interleaves with) an existing file. Refuse pre-existing outputs unless
+    # --overwrite, which truncates the train and eval logs up front.
+    eval_out = out.replace(".jsonl", "") + "_eval.jsonl"
+    existing = [p for p in (out, eval_out) if Path(p).exists()]
+    if existing and not args.overwrite:
+        raise SystemExit(f"refusing to append to existing {existing}; pass --overwrite "
+                         f"to truncate, or choose a fresh --out")
+    for p in (out, eval_out):
+        Path(p).unlink(missing_ok=True)
     trace_log = TraceLog(out)
 
     with OpenRouterClient() as client:
@@ -137,8 +150,7 @@ def main() -> None:
             difficulty_fn = RolloutProcessVerifier(
                 executor, terminal, n_rollouts=args.diff_rollouts).difficulty
 
-        eval_out = out.replace(".jsonl", "") + "_eval.jsonl"
-        eval_trace_log = TraceLog(eval_out)
+        eval_trace_log = TraceLog(eval_out)   # eval_out defined above with the overwrite guard
         reports = self_improve(
             train, eval_, executor, verifier, terminal,
             planner=planner, learner=args.learner, rounds=args.rounds,

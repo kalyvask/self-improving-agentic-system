@@ -65,6 +65,17 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 - DPO pair-mining could be made explicitly lexicographic (solved > correct-abstention > failed,
   then cheaper within class); solve_floor already pushes this direction.
 - GRPO: do NOT spend more -- it does not learn at this scale; keep as the estimated/contrast arm.
+- **STOP has no path into the data (top remaining BEHAVIOR gap):** 0 STOP on underspecified
+  tasks at cold start because the bandit only stops when all spend arms sample < 0.02. So
+  utility_rate == solve_rate until STOP is explored. Next behavior fix after the frontier check:
+  force some STOP exploration (epsilon over STOP, or stop when scores stay ~0 after k attempts).
+- **Measurement caveat:** now that completed trajectories use the exact terminal grade as the
+  process score, `gen_verif_gap` and `analyze_eval --verifier` collapse toward 0 for completed
+  work -- they no longer measure the cheap LLM verifier. Run the alt-test on the OLD/dedicated
+  verifier-vs-terminal traces, not the new ones, or they will overstate verifier quality.
+- DECOMPOSE is not hard-masked at decomposability=0 for the trainable policies (only the bandit
+  gates it); greedy eval picks WIDER anyway, so minor -- the controller should learn it.
+- **Append footgun fixed:** run_selfimprove now refuses pre-existing outputs unless --overwrite.
 
 **Research ideas (from the CS329A reading list, see Section 6):**
 - AB-MCTS Thompson WIDER<->DEEPER per-task posterior (self-adjusts to difficulty, no label).
