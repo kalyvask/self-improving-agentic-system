@@ -97,10 +97,17 @@ def grpo_train(
                     trace_log.append(t)
             R = [_rollout_reward(t, cfg.budget, cost_weight) for t in group]
             mean = sum(R) / len(R)
-            var = sum((r - mean) ** 2 for r in R) / len(R)
-            std = math.sqrt(var)
+            # Advantage is mean-centered only -- NOT divided by the group std.
+            # Dividing by std (vanilla GRPO) over-weights low-variance groups: when
+            # all G rollouts solve, the only variation is cost jitter (std ~ 0.02),
+            # and 1/std amplifies that jitter into advantages LARGER than the real
+            # solve-vs-fail signal from mixed groups (std ~ 0.32). That drove the
+            # policy toward the cheapest action (WIDER) on amplified noise and
+            # collapsed solve rate. Dropping the std division (Dr. GRPO, Liu et al.
+            # arXiv:2503.20783) removes that bias: mixed groups, with the largest
+            # reward gap, correctly dominate the gradient.
             for t, r in zip(group, R):
-                a = (r - mean) / (std + 1e-6)        # group-relative advantage
+                a = r - mean                         # group-relative advantage
                 for d in t.decisions:
                     if d.action in _INDEX and d.features:
                         X.append(d.features)
