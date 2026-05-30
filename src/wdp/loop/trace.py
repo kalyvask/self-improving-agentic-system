@@ -100,7 +100,8 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
                   budget: float | None = None,
                   advantage_floor: float = 0.5,
                   cost_weight: float = 0.5,
-                  abstention_credit: float = 0.5) -> None:
+                  abstention_credit: float = 0.5,
+                  solve_floor: float = 0.6) -> None:
     """Attach terminal reward + value-per-cost to each decision (in place).
 
     Spend decisions are credited by outcome *times* cost-efficiency *times* the
@@ -144,12 +145,28 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
     abstention below the solve scale keeps the abstention arm useful (a correct STOP
     still beats a premature one and beats failing) without letting it dominate.
     """
+    # Guard the credit ordering: a correct abstention must be worth less than the
+    # cheapest possible solve, or we re-create the STOP-over-solve asymmetry that
+    # drifted the controller to STOP. Required: 0 <= abstention_credit < solve_floor <= 1.
+    if not (0.0 <= abstention_credit < solve_floor <= 1.0):
+        raise ValueError(
+            f"need 0 <= abstention_credit ({abstention_credit}) < solve_floor "
+            f"({solve_floor}) <= 1 so solves out-value correct abstentions")
     spent = (trace.total_cost or {}).get(trace.currency)
     if spent is None:
         spent = sum(rec.marginal_cost for rec in trace.decisions)
     efficiency = 1.0
     if budget and budget > 0:
-        efficiency = math.exp(-cost_weight * (spent / budget))
+        # Solve floor: a real solve keeps at least `solve_floor` of its outcome
+        # credit no matter how expensive, so the cost term ranks cheap > expensive
+        # solves WITHOUT pushing a necessary-but-expensive solve (a DECOMPOSE that
+        # ran over budget, or a future ESCALATE to a pricier model) below a correct
+        # abstention (abstention_credit) or KTO's desirability threshold. Without
+        # this floor, exp(-cost_weight*spent/budget) drove expensive solves to
+        # ~0.2-0.3 -- under the 0.5 abstention credit -- so the objective taught
+        # "cheap mediocre beats necessary expensive" and suppressed DECOMPOSE.
+        # Keep solve_floor > abstention_credit so every solve out-values abstaining.
+        efficiency = solve_floor + (1.0 - solve_floor) * math.exp(-cost_weight * (spent / budget))
 
     # Per-step advantage = how much each decision raised the running-best process
     # score. Only positive moves count (a decision can't be blamed for noise dips).

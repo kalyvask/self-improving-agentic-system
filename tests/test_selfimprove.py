@@ -231,6 +231,90 @@ def test_self_improve_accepts_rollout_difficulty():
     assert len(reports) == 2 and reports[1].policy == "bc"
 
 
+def test_decompose_synthesizes_parent_answer():
+    # Bug #1: DECOMPOSE must SYNTHESIZE a parent answer, not concatenate sub-answers.
+    # Before the fix parent.final_answer was "[s1] 6\n[s2] 20", graded on the last
+    # number (20) not the sum (26), so DECOMPOSE could never solve a multi-part task.
+    from wdp.loop.runner import run_task
+    from wdp.planner.decompose import SubTaskDAG, SubTask
+    from wdp.benchmarks.arithmetic import ArithmeticVerifier
+    from wdp.allocator.policy import Action, Decision
+
+    class DecomposeAllocator:
+        def decide(self, feats, currency, *, explore=False):
+            return Decision(action=Action.DECOMPOSE, scores={Action.DECOMPOSE: 1.0})
+
+    class FixedPlanner:
+        def probe(self, task, *, parallel_group=None, ledger=None):
+            return 1.0
+        def decompose(self, task, *, parallel_group=None, ledger=None):
+            return SubTaskDAG(parent_id=task.id, subtasks=[
+                SubTask(task=Task(id="p::s1", prompt="Compute 2 * 3.", metadata={"sub_id": "s1"})),
+                SubTask(task=Task(id="p::s2", prompt="Compute 4 * 5.", metadata={"sub_id": "s2"})),
+            ])
+
+    class FixedExecutor:
+        def run(self, task, *, ledger=None, parallel_group=None):
+            ans = "26" if "synthesis" in task.id else (
+                "6" if "2 * 3" in task.prompt else "20" if "4 * 5" in task.prompt else "0")
+            return Trajectory(task_id=task.id, final_answer=ans, parallel_group=parallel_group)
+
+    class ConstVerifier:
+        def score_step(self, task, partial, *, ledger=None):
+            return Score(value=1.0)
+
+    task = Task(id="p", prompt="Compute 2 * 3 and 4 * 5, then sum.", metadata={"gold": 26.0})
+    trace = run_task(task, DecomposeAllocator(), FixedExecutor(), verifier=ConstVerifier(),
+                     terminal=ArithmeticVerifier(), planner=FixedPlanner(),
+                     cfg=RunConfig(max_decisions=1))
+    assert trace.solved                      # synthesized 26 -> graded correct (was 20)
+
+
+def test_decompose_masked_when_no_planner():
+    # Bug #2: with planner=None, DECOMPOSE cannot run; it must be re-picked to the
+    # best available action instead of being logged as a zero-cost no-op.
+    from wdp.loop.runner import run_task
+    from wdp.allocator.policy import Action, Decision
+
+    class DecomposePreferring:
+        def decide(self, feats, currency, *, explore=False):
+            return Decision(action=Action.DECOMPOSE,
+                            scores={Action.DECOMPOSE: 0.6, Action.WIDER: 0.3, Action.DEEPER: 0.1})
+
+    ex, pl, vf, tm = _stack()
+    trace = run_task(Task(id="t", prompt="q"), DecomposePreferring(), ex, vf, tm,
+                     planner=None, cfg=RunConfig(max_decisions=1))
+    assert "decompose" not in [d.action for d in trace.decisions]
+
+
+def test_rollout_difficulty_bills_a_labeling_ledger():
+    # Bug #3: forked difficulty rollouts must be billed somewhere (visible), not vanish.
+    from wdp.verifier.rollout import RolloutProcessVerifier
+    ex, pl, vf, tm = _stack()
+    rpv = RolloutProcessVerifier(ex, tm, n_rollouts=3)
+    rpv.difficulty(Task(id="t0", prompt="q"))           # no ledger -> labeling ledger
+    assert rpv.labeling_ledger.amount("dollars") > 0
+
+
+def test_subtasks_exclude_parent_gold():
+    # Bug #4: subtasks must not inherit the parent's gold (would mis-grade a subtask).
+    pl = Planner(FakeClient(), "fake")
+    task = Task(id="p", prompt="q", metadata={"gold": 26.0, "kind": "multi"})
+    dag = pl.decompose(task)
+    assert dag.subtasks
+    for st in dag.subtasks:
+        assert "gold" not in st.task.metadata
+        assert st.task.metadata.get("parent_gold") == 26.0
+
+
+def test_credit_ordering_guard():
+    # Bug #5: abstention_credit must stay below solve_floor or solves lose to STOP.
+    import pytest
+    with pytest.raises(ValueError):
+        assign_credit(_solved_trace(0.02), budget=0.2,
+                      abstention_credit=0.6, solve_floor=0.5)
+
+
 def test_arithmetic_benchmark_offline():
     b = ArithmeticBenchmark(n_atomic=3, n_multi=2, n_underspecified=1, seed=0)
     tasks = b.tasks()

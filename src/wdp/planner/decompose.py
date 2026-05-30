@@ -98,10 +98,16 @@ class Planner:
         subs: list[SubTask] = []
         for it in items:
             sid = str(it.get("id") or f"{task.id}.s{len(subs)}")
+            # Do NOT copy the parent's gold into subtasks: a subtask ("compute 2*3")
+            # graded against the parent's gold (the final sum) would be scored wrong.
+            # Keep the parent's gold under parent_gold for reference only.
+            sub_meta = {k: v for k, v in task.metadata.items() if k != "gold"}
+            sub_meta.update({"parent": task.id, "sub_id": sid,
+                             "parent_gold": task.metadata.get("gold")})
             subs.append(
                 SubTask(
                     task=Task(id=f"{task.id}::{sid}", prompt=str(it.get("prompt", "")),
-                              metadata={**task.metadata, "parent": task.id, "sub_id": sid}),
+                              metadata=sub_meta),
                     depends_on=[f"{task.id}::{d}" for d in (it.get("depends_on") or [])],
                 )
             )

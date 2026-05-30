@@ -18,7 +18,7 @@ import math
 import statistics
 from dataclasses import dataclass
 
-from wdp.allocator.policy import Action, NodeFeatures
+from wdp.allocator.policy import Action, Decision, NodeFeatures
 from wdp.cost import CostLedger
 from wdp.executor.react import Executor, Task, Trajectory
 from wdp.loop.trace import DecisionRecord, TaskTrace, assign_credit
@@ -35,6 +35,7 @@ class RunConfig:
     deeper_extra_steps: int = 6
     cost_weight: float = 0.5             # credit cost-efficiency steepness (thesis knob)
     abstention_credit: float = 0.5       # scale on correct-STOP credit (< solve scale)
+    solve_floor: float = 0.6             # min cost-efficiency for a solve (> abstention_credit)
 
 
 def _features(
@@ -118,6 +119,13 @@ def run_task(
                            decomposability=decomposability,
                            difficulty_override=task_difficulty)
         decision = allocator.decide(feats, cfg.currency, explore=explore)
+        # Mask unavailable actions: without a planner, DECOMPOSE cannot run and would
+        # be logged as a zero-cost no-op (distorting tau-bench learning and cost).
+        # Re-pick the best available action from the same scores instead.
+        if decision.action == Action.DECOMPOSE and planner is None:
+            avail = {a: v for a, v in decision.scores.items() if a != Action.DECOMPOSE}
+            if avail:
+                decision = Decision(action=max(avail, key=avail.get), scores=decision.scores)
         cost_before = ledger.amount(cfg.currency)
 
         if decision.action == Action.STOP:
@@ -191,7 +199,7 @@ def run_task(
         trace.abstention_reward = float(score_abstention(task).value)
     trace.total_cost = ledger.snapshot()
     assign_credit(trace, budget=cfg.budget, cost_weight=cfg.cost_weight,
-                  abstention_credit=cfg.abstention_credit)
+                  abstention_credit=cfg.abstention_credit, solve_floor=cfg.solve_floor)
     return trace
 
 
@@ -219,7 +227,24 @@ def _run_decompose(task, planner, executor, ledger, parallel_group) -> Trajector
             ans = sub_traj.final_answer or "(no answer)"
             answers.append(f"[{st.task.metadata.get('sub_id', st.task.id)}] {ans}")
             parent.steps.extend(sub_traj.steps)
-    parent.final_answer = "\n".join(answers)
+    # Synthesis step: combine the sub-answers into the PARENT answer. Without this
+    # the parent answer was just the concatenation of sub-answers, so the terminal
+    # verifier graded it on the last sub-result (e.g. read 20 from "[s1] 6\n[s2] 20"
+    # instead of the sum 26) -- DECOMPOSE could NEVER solve a multi-part task, so the
+    # learner correctly suppressed it (0 solves across the calibrated runs) and the
+    # multi-task headroom never materialized. Run one more executor pass over the
+    # original task plus the sub-results; bill it to the same ledger.
+    sub_block = "\n".join(answers)
+    synth_task = Task(
+        id=f"{task.id}::synthesis",
+        prompt=(f"{task.prompt}\n\nSub-results already computed:\n{sub_block}\n\n"
+                "Using ONLY these sub-results, combine them and FINISH with the single "
+                "final answer."),
+        metadata=task.metadata,
+    )
+    synth = executor.run(synth_task, ledger=ledger, parallel_group=f"{parallel_group}:synth")
+    parent.steps.extend(synth.steps)
+    parent.final_answer = synth.final_answer if synth.final_answer is not None else sub_block
     return parent
 
 

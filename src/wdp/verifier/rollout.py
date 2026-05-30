@@ -29,11 +29,18 @@ class RolloutProcessVerifier:
 
     def __init__(self, executor, terminal, *, n_rollouts: int = 4,
                  solved_threshold: float = 0.99) -> None:
+        if n_rollouts <= 0:
+            raise ValueError("n_rollouts must be positive")
         self._executor = executor
         self._terminal = terminal
         self.n_rollouts = n_rollouts
         self.solved_threshold = solved_threshold
         self._cache: dict[str, float] = {}
+        # Labeling rollouts are a TRAIN-TIME cost, separate from per-task solve/cost.
+        # They bill here (not into the task ledger) so the cost is visible and can be
+        # reported separately, instead of silently distorting the per-task cost metric
+        # (and unevenly, since difficulty is cached and only the first task would pay).
+        self.labeling_ledger = CostLedger()
 
     @staticmethod
     def _key(task) -> str:
@@ -53,9 +60,10 @@ class RolloutProcessVerifier:
         key = self._key(task)
         if key in self._cache:
             return self._cache[key]
+        led = ledger if ledger is not None else self.labeling_ledger
         solved = 0
         for i in range(self.n_rollouts):
-            traj = self._executor.run(task, ledger=ledger,
+            traj = self._executor.run(task, ledger=led,
                                       parallel_group=f"diffprobe:{key}:{i}")
             if self._terminal_value(task, traj) >= self.solved_threshold:
                 solved += 1
