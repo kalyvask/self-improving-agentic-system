@@ -1,3 +1,7 @@
+<!-- TEMPORARY working handoff for a second model. DELETE this file (and drop it from
+     git) once the collaboration is done and its contents are folded into the README /
+     final writeup. Not intended to live in the repo long-term. -->
+
 # Research state and handoff
 
 A complete working dump for a second model to reason about this project cold. Covers
