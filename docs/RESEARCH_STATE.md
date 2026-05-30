@@ -108,6 +108,26 @@ WIDER (see §3 bug #3 note + the residual-mechanism finding in §5 P6).
 
 ---
 
+## 2a. UPDATE: DECOMPOSE was broken (likely the main flat-frontier cause)
+
+A later review found a structural bug that reframes the "flat frontier" story. `_run_decompose`
+set the parent answer to the CONCATENATION of sub-answers (`"[s1] 6\n[s2] 20"`), and the
+arithmetic verifier reads the last number -> it graded 20, never the sum 26. So DECOMPOSE was
+*incapable* of solving a multi-part task: it solved 0 tasks across every calibrated run. The
+learners were therefore CORRECT to suppress it, and the multi-part headroom (the band where
+allocation should matter most) never materialized. Fixed (commit cae1958) by adding a synthesis
+pass that combines the sub-results into the parent answer. Four smaller correctness fixes shipped
+with it: mask DECOMPOSE when planner=None (was a logged no-op on tau-bench); bill rollout-difficulty
+to a separate labeling ledger (was invisible); drop parent gold from subtask metadata; and a
+solve_floor on credit (a solve keeps >= solve_floor of its outcome credit so a necessary-but-
+expensive DECOMPOSE/ESCALATE is not pushed below a correct abstention) with an enforced ordering
+0 <= abstention_credit < solve_floor <= 1.
+
+**Implication:** the §2b explanation below is still right about the controller's structural
+limits, but part of the flatness was this bug, not just thin headroom. The next step is a fresh
+arithmetic sweep (escalation still OFF) to see whether DECOMPOSE usage now rises on multi-part
+tasks and the cost/solve frontier finally moves -- before any escalation.
+
 ## 2b. Why we are not improving yet (plain words)
 
 We have not yet moved the headline -- more solves, or clearly lower cost. The honest reason is
