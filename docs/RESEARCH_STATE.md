@@ -108,6 +108,56 @@ WIDER (see §3 bug #3 note + the residual-mechanism finding in §5 P6).
 
 ---
 
+## 2b. Why we are not improving yet (plain words)
+
+We have not yet moved the headline -- more solves, or clearly lower cost. The honest reason is
+simple, and it points straight at what to do next.
+
+**What the controller can and cannot do.** It only decides HOW to spend compute on a task:
+another fresh attempt (WIDER), keep going on the current one (DEEPER), split it up (DECOMPOSE),
+or give up (STOP). It does NOT make the underlying model (Haiku) any smarter. That is the key
+limit, and it squeezes the controller from both sides:
+- On EASY tasks one attempt already solves them, so there is nothing to allocate better.
+- On HARD tasks Haiku simply cannot do, re-routing the same weak model more cleverly does not
+  get you past a capability wall.
+- That leaves only a thin middle band where smart allocation matters. On our arithmetic suite
+  that band is small (atomic 0.94, multi 0.65, unsolvable 0.00), so the ceiling on any
+  improvement is low to begin with.
+
+**Three more things hold it down:**
+1. The cheap progress-checker (process verifier) is near-noise: it fails the alt-test (agrees
+   with the truth 0.60 vs 0.69 for just guessing the majority). The controller partly steers
+   on a bad signal.
+2. The eval is small (44 tasks), so even a real small gain would not show above the noise.
+3. GRPO does not learn at this scale (tiny policy, ~5 useful training groups per step, flat
+   reward) -- not a bug, just the wrong tool here. BC/DPO are stable; DPO is the robust pick.
+
+**And the earlier "collapses" were bugs, now fixed** (four credit/normalization bugs, §3).
+After fixing them the learners are stable and competitive -- just flat, for the reasons above.
+So the work so far bought correctness and understanding, not yet a bigger number.
+
+**What would actually move it, in order:**
+1. **Add a lever that changes outcomes: ESCALATE to a stronger model (Opus).** Today no action
+   can solve a task Haiku cannot. Escalation raises the ceiling AND creates a real
+   cost-vs-accuracy choice the controller can optimize ("stay cheap on Haiku; escalate only
+   when stuck"). Biggest lever for solve rate, and the most thesis-relevant. Nuance: on
+   arithmetic the cheap winning move for multi-part tasks is often DECOMPOSE (split into atomic
+   parts Haiku already solves), so the interesting decision is decompose-vs-escalate on cost;
+   on tau-bench, where the gap is genuine reasoning, escalation is the only ceiling-raiser.
+2. **Give it a trustworthy signal: rollout-grounded labels (Math-Shepherd) or a strong-model
+   judge.** Replace the near-noise verifier so decisions (and the difficulty feature) rest on
+   something real. Cheaper than escalation -- paid once at train time, deploy stays cheap. But
+   it sharpens DECISIONS only; it cannot raise the executor's capability ceiling.
+3. **Tasks where allocation matters** (partly done: tier-3 + 5-part). No headroom, no visible gain.
+4. **Measure on paired cost with enough tasks for power.** Solve rate at n=44 cannot resolve
+   small wins; cost can.
+
+One-line summary: we are flat because the controller can only re-route a fixed-capability model,
+on an easy benchmark, judged by a weak signal. Fix any of those -- above all, add a real
+capability lever (escalation) and a trustworthy training signal -- and there is room to improve.
+
+---
+
 ## 3. Bugs found and fixed (this is much of the real work)
 
 1. **Cost-credit cap-flattening** (`b30bc41`). `efficiency = 1 - cost_weight*min(1, spent/budget)`
@@ -219,10 +269,20 @@ by step 8-10. Verified on the fixed-probe traces:
 **Root cause (the through-line across all four learners):** a sharp per-rollout COST term
 over-penalizes the necessary-but-expensive action (DECOMPOSE for GRPO, STOP credit for KTO),
 and each objective amplifies it differently; on a thin-headroom benchmark this yields a
-degenerate single-action policy. **Fixes:** (a) DAPO dynamic sampling -- drop all-same-outcome
-groups so only real solve/fail signal trains (removes the cost-only suppression in all-solve
-groups); (b) softer cost term (lower cost_weight, now a CLI knob) so cost shapes but does not
-dominate outcome; (c) clip-higher / KL-anchor tuning as secondary insurance.
+degenerate single-action policy.
+
+**Dynamic sampling tried -- arrested the collapse but GRPO still does not learn (NO BUG).**
+Added DAPO dynamic sampling (drop all-same-outcome groups). Result: the catastrophic
+cheap-WIDER collapse is gone (solve no longer craters to 0.52; it holds ~0.66-0.70), and
+DECOMPOSE survives so cost rises rather than cratering -- but GRPO still ends BELOW its 0.84
+BC warm-start. Verified on the collection traces that this is not a sign error or eval bug:
+the mean training reward is FLAT across steps (~0.45, never climbs), eval uses the updated
+policy, warm-start copies BC correctly, and the reward rewards solving. Conclusion: on-policy
+GRPO simply does not learn at this scale -- a tiny linear policy with only ~5 informative
+groups per step gives too noisy a gradient to beat a good BC warm-start, and it costs 2-5x to
+run. This is the wrong tool for this regime; DPO (offline, pairwise) is the robust choice.
+Remaining GRPO knobs (softer cost_weight, clip-higher, more steps) are unlikely to change the
+verdict and are not worth the spend.
 
 ---
 
@@ -303,17 +363,24 @@ precision plateaus without a real verifier). So fix the verifier first, then all
   per-difficulty-bin action table as a search space and Bayesian-optimize offline on the
   100-task suite instead of hand-tuning. Free-offline. Optimal config varies by task+budget.
 
-### Suggested sequence (cheapest, highest-leverage first)
-1. **Math-Shepherd rollout labels** → replace the verifier + fix the difficulty feature (A).
-   Cache labels by `task_id + transcript_hash` so a given partial trajectory is only
-   forked once. Swap in for `difficulty = 1 - first_process_score` at runner.py:~63.
-2. **DAPO dynamic sampling** → in grpo_train, skip/down-weight all-solve and all-fail
-   groups (outcome variance first, cost second). Complements the std fix; kills residual
-   cost-jitter. Plus optionally a softer cost term.
-3. **AB-MCTS Thompson WIDER↔DEEPER** → per-task posterior from early attempts, as a router
-   and/or baseline alongside the bandit (C).
-4. **Harder, separable tasks** (see §5 P3 refinement) → real allocation headroom.
-5. **Power-law STOP rule** → principled cost lever / abstention (C).
+### Suggested sequence (updated with what we have learned)
+- [DONE] **DAPO dynamic sampling** — arrested the GRPO cheap-collapse but GRPO still does not
+  beat its BC warm-start (does not learn at this scale, §5 P6). Not pursued further.
+- [DONE] **Harder, separable tasks** — tier-3 atomic + 5-part multi added for headroom.
+- **Step 3, verifier/signal:** Math-Shepherd rollout-grounded labels (or a strong-model judge)
+  to replace the near-noise verifier + the difficulty feature. Cache by
+  `task_id + transcript_hash`; swap in for `difficulty = 1 - first_process_score` at
+  runner.py:~63. Sharpens DECISIONS; paid once at train time, deploy stays cheap; cannot raise
+  the executor capability ceiling.
+- **Step 4 (capstone), ESCALATE to a stronger model (Opus) as a 5th action.** The only lever
+  that raises the capability ceiling and creates a real cost-vs-accuracy frontier the
+  controller optimizes ("stay cheap on Haiku; decompose; escalate only when stuck"). Most
+  thesis-relevant; likeliest path from flat to a resolved win. Policy auto-sizes to 5 actions;
+  cost ledger already handles the ~10-15x price gap.
+- **Step 5, tau-bench demonstration** with escalation + better verifier, measured on PAIRED
+  COST — tau-bench is where the capability gap is genuine, so escalation pays there; worth the
+  spend only after steps 3-4.
+- (Also available: AB-MCTS Thompson WIDER/DEEPER router; power-law STOP rule.)
 
 ### Cross-check + refinements (independent second-tool analysis + our offline tests)
 An independent analysis converged on the SAME diagnosis (verifier-first; STOP-credit
