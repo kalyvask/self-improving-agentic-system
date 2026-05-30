@@ -185,6 +185,18 @@ def test_cheaper_solve_earns_higher_credit():
     assign_credit(overspent, budget=0.2)
     assert overspent.decisions[0].value_per_cost > 0.0
 
+    # Regression: the smooth decay must keep discriminating PAST the budget. The
+    # old `1 - cost_weight*min(1, spent/budget)` cap flattened every over-budget
+    # solve to the same floor, so a 3x-budget blowout trained identically to a
+    # marginal 1.1x overspend -- no gradient against runaway spend. A gross
+    # overspend must now earn strictly less credit than a marginal one.
+    marginal = _solved_trace(0.22)         # 1.1x budget
+    gross = _solved_trace(0.60)            # 3x budget
+    assign_credit(marginal, budget=0.2)
+    assign_credit(gross, budget=0.2)
+    assert gross.decisions[0].value_per_cost < marginal.decisions[0].value_per_cost
+    assert gross.decisions[0].value_per_cost > 0.0
+
 
 def test_stop_credit_comes_from_abstention_reward():
     # The bug we fixed: STOP must NOT be credited just because the task went

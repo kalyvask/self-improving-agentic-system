@@ -17,6 +17,7 @@ trainers in wdp.loop can read it without importing the live agent stack.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -108,15 +109,18 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
 
       - outcome: `trace.terminal_reward`, the graded quality of the best answer
         (not a binary solved flag, so a partial reward still trains).
-      - cost-efficiency: `1 - cost_weight * min(1, spent/budget)`, which lives in
-        `[1 - cost_weight, 1]`. A solve that used little budget keeps almost all
-        its reward; one that burned (or exceeded) the budget keeps `1-cost_weight`
-        of it -- reduced, but never zero. This is the fix for a real failure mode:
-        the old `1 - spent/budget` drove efficiency to 0 for any solve that hit the
-        budget, which erased the credit on exactly the expensive-but-winning WIDER
-        traces and taught the policy to avoid the action with the most headroom. A
-        *solved* task must always train as a win, just a less efficient one when
-        pricey. Without a budget this term is 1.0 (old cost-blind behavior).
+      - cost-efficiency: `exp(-cost_weight * spent/budget)`, a smooth decay in
+        (0, 1]. A solve that used little budget keeps almost all its reward; a
+        pricey one keeps less, but it is *never* zero, so a solved task always
+        trains as a win. Two earlier forms each failed: `1 - spent/budget` drove
+        efficiency to 0 at budget and erased expensive-but-winning WIDER traces;
+        its replacement `1 - cost_weight*min(1, spent/budget)` fixed that but the
+        `min(1, .)` cap flattened *every* over-budget trace to the same floor, so
+        a solve at 1.1x budget and one at 3x budget got identical credit -- no
+        gradient against runaway spend, which let the policy balloon its cost on
+        expensive benchmarks. The exponential removes the cap: it keeps decaying
+        past budget, so gross overspend is penalized strictly more than marginal
+        overspend while staying positive. Without a budget this term is 1.0.
       - contribution (advantage): how much this decision *raised the best process
         score seen so far*. A WIDER that spun a dead-end attempt and a DEEPER that
         finished the winner used to get identical credit on a solved task; now the
@@ -136,8 +140,7 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
         spent = sum(rec.marginal_cost for rec in trace.decisions)
     efficiency = 1.0
     if budget and budget > 0:
-        used = min(1.0, spent / budget)
-        efficiency = 1.0 - cost_weight * used
+        efficiency = math.exp(-cost_weight * (spent / budget))
 
     # Per-step advantage = how much each decision raised the running-best process
     # score. Only positive moves count (a decision can't be blamed for noise dips).

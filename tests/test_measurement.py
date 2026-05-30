@@ -12,6 +12,7 @@ from wdp.metrics.reliability import (
     wilson_ci, min_detectable_effect, tasks_needed, mcnemar, paired_diff_ci,
 )
 from wdp.metrics.irt import fit_from_responses
+from wdp.metrics.alt_test import alt_test, best_threshold
 
 
 def test_wilson_ci_is_wide_at_small_n():
@@ -51,6 +52,21 @@ def test_paired_cost_ci_resolves_a_consistent_shift():
     # A noisy zero-mean difference should straddle 0.
     noisy = paired_diff_ci([0.1, -0.1, 0.1, -0.1, 0.1, -0.1], seed=0)
     assert noisy.lo < 0 < noisy.hi
+
+
+def test_alt_test_passes_a_good_judge_and_fails_a_useless_one():
+    # A judge that tracks ground truth (high score on solved, low on failed) must
+    # clear the majority baseline by the margin and PASS.
+    truth = [1.0] * 10 + [0.0] * 10
+    good = [0.9] * 10 + [0.1] * 10
+    assert alt_test(good, truth, epsilon=0.05).passed
+    # A judge that fires the same score regardless of outcome carries no signal: at
+    # any threshold it can only match the majority baseline, so it FAILS the test.
+    useless = [0.8] * 20
+    assert not best_threshold(useless, truth, epsilon=0.05).passed
+    # On a balanced set the useless judge's advantage CI straddles 0.
+    r = alt_test(useless, truth, threshold=0.5, epsilon=0.0)
+    assert r.advantage_lo <= 0.0 <= r.advantage_hi
 
 
 def test_rasch_recovers_difficulty_order():

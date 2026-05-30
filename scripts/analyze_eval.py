@@ -29,6 +29,7 @@ from wdp.metrics.reliability import (
     wilson_ci, min_detectable_effect, tasks_needed, mcnemar, paired_diff_ci,
 )
 from wdp.metrics.irt import fit_from_responses
+from wdp.metrics.alt_test import alt_test, best_threshold
 
 
 def _by_policy(traces):
@@ -108,18 +109,45 @@ def analyze_irt(paths: list[str]) -> None:
     print("   " + ", ".join(fit.items[i] for i in top))
 
 
+def analyze_verifier(paths: list[str]) -> None:
+    """Alt-test verdict on whether the cheap ProcessVerifier is good enough to act
+    on: does its best process score predict terminal success better than always
+    guessing the majority outcome? Ground truth = the env-graded solved flag."""
+    scores, truth = [], []
+    for p in paths:
+        for t in TraceLog(p).read():
+            ps = [d.process_score_after for d in t.decisions
+                  if getattr(d, "process_score_after", None) is not None]
+            if not ps:
+                continue
+            scores.append(max(ps))
+            truth.append(1.0 if (t.solved or t.terminal_reward >= 0.99) else 0.0)
+    if not scores:
+        print("[verifier] no process scores found.")
+        return
+    print(f"\n=== ProcessVerifier alt-test | {len(scores)} traces, "
+          f"solve rate {sum(truth)/len(truth):.2f} ===")
+    print(" " + str(alt_test(scores, truth, threshold=0.5, epsilon=0.05)).replace("\n", "\n "))
+    print(" best operating point over thresholds:")
+    print(" " + str(best_threshold(scores, truth, epsilon=0.05)).replace("\n", "\n "))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ab", help="paired trace file with exactly two policies")
     ap.add_argument("--irt", nargs="*", default=[],
                     help="trace files to pool for the IRT difficulty fit")
+    ap.add_argument("--verifier", nargs="*", default=[],
+                    help="trace files to pool for the ProcessVerifier alt-test")
     args = ap.parse_args()
     if args.ab:
         analyze_ab(args.ab)
     if args.irt:
         analyze_irt(args.irt)
-    if not args.ab and not args.irt:
-        ap.error("pass --ab and/or --irt")
+    if args.verifier:
+        analyze_verifier(args.verifier)
+    if not args.ab and not args.irt and not args.verifier:
+        ap.error("pass --ab, --irt, and/or --verifier")
 
 
 if __name__ == "__main__":
