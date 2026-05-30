@@ -331,6 +331,15 @@ capability lever (escalation) and a trustworthy training signal -- and there is 
    LLM scorer only for genuinely partial work. Also added eval-trace round tags (name@rN) and
    utility_rate / solvable_solve_rate metrics.
 
+9. **BC discarded DECOMPOSE (training-selection blocker)** (`cca18f1`). After DECOMPOSE could
+   solve, `_filter_traces` still kept only the top-fraction by mean value-per-cost -- the cheap
+   atomic solves -- so the BC reference (and DPO/KTO warm start) had ~0 DECOMPOSE/STOP examples.
+   Fix: keep all SUCCESSFUL traces (solve or correct abstention), STaR-style; vpc weighting still
+   favors cheap. Also: analyze_eval now compares bandit@r0 vs final learner round on tagged eval.
+   OPERATIONAL note: a duplicate sweep (a lingering bash wrapper kept respawning python and
+   re-appending to calib2_*) contaminated the prior attempt -- killed all by command line and
+   relaunched ONE clean sweep. Always confirm a single wrapper before/after launching.
+
 Earlier fixes (pre-this-session): cost-credit normalization, billing verifier+planner into
 the ledger, freezing the bandit during eval, fixing inverted STOP credit, fixing greedy
 collection that collapsed exploration, seeds plumbing, recency-window fitting.
