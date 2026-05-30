@@ -39,14 +39,30 @@ def _by_policy(traces):
     return out
 
 
+def _pick_ab(names):
+    """Choose the two policies to compare. Eval traces are now round-tagged
+    (bandit@r0, bc@r1, bc@r2, bc@r3), so when there are more than two we compare the
+    cold-start baseline (round 0) against the final learner round (highest @rN)."""
+    if len(names) == 2:
+        return names[0], names[1]
+    def _round(p):
+        return int(p.split("@r")[1]) if "@r" in p else -1
+    baseline = next((p for p in names if _round(p) == 0), None)
+    final = max(names, key=_round)
+    if baseline is not None and final != baseline:
+        return baseline, final
+    return None
+
+
 def analyze_ab(path: str) -> None:
     traces = TraceLog(path).read()
     pols = _by_policy(traces)
     names = list(pols)
-    if len(names) != 2:
-        print(f"[ab] expected 2 policies in {path}, found {names}; skipping A/B.")
+    pick = _pick_ab(names)
+    if pick is None:
+        print(f"[ab] could not pick 2 policies in {path}, found {names}; skipping A/B.")
         return
-    a_name, b_name = names
+    a_name, b_name = pick
     a, b = pols[a_name], pols[b_name]
     shared = sorted(set(a) & set(b))
     n = len(shared)

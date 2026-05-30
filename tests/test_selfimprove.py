@@ -231,6 +231,23 @@ def test_self_improve_accepts_rollout_difficulty():
     assert len(reports) == 2 and reports[1].policy == "bc"
 
 
+def test_bc_keeps_decompose_solves_not_just_cheap_atomic():
+    # Bug: BC kept only the top-fraction by mean value-per-cost (cheap atomic solves)
+    # and discarded expensive-but-correct DECOMPOSE solves, starving the reference of
+    # the action that helps multi tasks. Now it keeps all successes.
+    from wdp.allocator.bc import _filter_traces
+    cheap = TaskTrace(task_id="a", currency="dollars", policy="bandit", solved=True, terminal_reward=1.0)
+    cheap.add(DecisionRecord(step=0, features=[0.0], action="wider", value_per_cost=0.95))
+    pricey = TaskTrace(task_id="m", currency="dollars", policy="bandit", solved=True, terminal_reward=1.0)
+    pricey.add(DecisionRecord(step=0, features=[0.0], action="decompose", value_per_cost=0.6))
+    failed = TaskTrace(task_id="f", currency="dollars", policy="bandit", solved=False)
+    failed.add(DecisionRecord(step=0, features=[0.0], action="wider", value_per_cost=0.0))
+    kept = _filter_traces([cheap, pricey, failed], keep_fraction=0.3)
+    actions = {d.action for t in kept for d in t.decisions}
+    assert "decompose" in actions and "wider" in actions   # both successes survive
+    assert failed not in kept                               # failure excluded
+
+
 def test_decompose_synthesizes_parent_answer():
     # Bug #1: DECOMPOSE must SYNTHESIZE a parent answer, not concatenate sub-answers.
     # Before the fix parent.final_answer was "[s1] 6\n[s2] 20", graded on the last

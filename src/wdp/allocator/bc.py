@@ -91,11 +91,28 @@ def _choose(p: np.ndarray, rng: np.random.Generator, eps: float) -> int:
 
 
 def _filter_traces(traces, keep_fraction: float):
-    """Keep the top `keep_fraction` traces by mean realized value-per-cost."""
-    scored = []
-    for tr in traces:
-        vals = [d.value_per_cost for d in tr.decisions] or [0.0]
-        scored.append((float(np.mean(vals)), tr))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    """Keep the SUCCESSFUL traces (a solve, or a correct abstention) -- STaR-style
+    rejection sampling -- rather than only the globally cheapest by mean value-per-cost.
+
+    The old top-`keep_fraction`-by-mean-vpc filter kept only the cheap atomic solves
+    (highest value-per-cost) and discarded the expensive-but-correct DECOMPOSE solves
+    and the correct STOPs. That starved the BC reference -- and the DPO/KTO policies
+    warm-started from it -- of the very actions that help multi-part and unsolvable
+    tasks, so the controller could never learn to use them. Keeping every success
+    preserves those examples; per-decision value-per-cost weighting (with solve_floor)
+    still emphasizes cheaper solves without erasing the necessary-expensive ones.
+    Falls back to the old top-fraction rule only when nothing has succeeded yet."""
+    successful = [
+        tr for tr in traces
+        if tr.solved or (tr.abstention_reward >= 0.5
+                         and any(d.action == "stop" for d in tr.decisions))
+    ]
+    if successful:
+        return successful
+    scored = sorted(
+        traces,
+        key=lambda tr: float(np.mean([d.value_per_cost for d in tr.decisions] or [0.0])),
+        reverse=True,
+    )
     k = max(1, math.ceil(keep_fraction * len(scored)))
-    return [tr for _, tr in scored[:k]]
+    return scored[:k]
