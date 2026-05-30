@@ -169,6 +169,10 @@ def assign_credit(trace: TaskTrace, *, gamma: float = 1.0,
             # abstention reward, not 1 - terminal_reward, so a failed task isn't a
             # good place to give up), scaled below the solve scale so a correct
             # abstention can't out-value an actual solve and dominate the clone.
+            # (We tried also discounting by cost-efficiency to reward EARLY
+            # abstention, but it pushed every correct STOP below KTO's desirability
+            # threshold, neutralizing the abstention arm for zero gain on the actual
+            # collapse -- so STOP credit is left on the flat abstention scale.)
             rec.value_per_cost = abstention_credit * trace.abstention_reward
             continue
         discount = gamma ** (n - 1 - i)

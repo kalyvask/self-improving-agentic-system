@@ -123,6 +123,16 @@ round-3 collapse — the closest thing to the thesis win we have.
    shed hard-task solves -> collapse 0.84->0.55. Fix: mean-center, drop std division
    (Dr. GRPO, arXiv:2503.20783). On probe traces, all-solve cost-jitter advantage |1.6|->|0.03|
    while mixed-group signal stays |0.52| (real signal now dominates ~15x).
+4. **Abstention-credit asymmetry** (`9e8c06d`). A correct abstention was credited the
+   maximum 1.0, while a correct solve is cost-discounted to ~0.6-0.8 -- so abstaining looked
+   *better* than solving. That made correct-STOP decisions the single highest-weighted
+   examples in the BC reference's value-weighted clone; every learner and the warm-started
+   KTO/GRPO policies inherited a STOP-heavy reference and drifted toward STOP across rounds.
+   Diagnosed offline: BC fit on the KTO arm's accumulated traces gave P(STOP)=0.47 vs 0.003
+   on the clean BC arm DESPITE identical ~5% STOP frequency -- so it was the credit WEIGHTING,
+   not the STOP count. Fix: scale STOP credit by `abstention_credit=0.5` so a correct
+   abstention can't out-value a solve. Offline: BC P(STOP) 0.47->0.004, KTO 0.51->0.002.
+   This is the true root of the "KTO round-3 collapse" (supersedes the P2 hypothesis below).
 
 Earlier fixes (pre-this-session): cost-credit normalization, billing verifier+planner into
 the ledger, freezing the bandit during eval, fixing inverted STOP credit, fixing greedy
@@ -163,15 +173,16 @@ and either (a) train a better cheap scorer or (b) replace the difficulty feature
 rollout-based estimate. **Concern:** on arithmetic the terminal verifier is free, but on
 tau-bench it isn't, so any verifier-improvement must transfer. (See §6 — verifier agent.)
 
-### P2. KTO round-3 STOP drift, even after the beta fix
+### P2. KTO round-3 STOP drift — RESOLVED (was bug #4, the abstention-credit asymmetry)
 With the beta bug fixed, KTO rounds 1–2 were good (0.82, ~20% cheaper), then round 3
-drifted to STOP as *correct-abstention* examples accumulated. **Hypothesis A (credit
-asymmetry):** a correct STOP earns 1.0 while a cost-discounted correct solve earns ~0.7,
-so KTO rationally prefers abstaining — cap abstention credit at/below the solve credit, or
-treat STOP credit on the same efficiency scale. **Hypothesis B (representation):** the
-linear policy can't separate "unsolvable" from "solvable" states, so STOP over-generalizes;
-DPO avoids this because it compares within state buckets. **Concern:** fixes that suppress
-STOP must not kill the legitimate abstention arm on the underspecified tasks.
+drifted to STOP. **Resolved:** Hypothesis A (credit asymmetry) was correct and is now fixed
+(`9e8c06d`, see bug #4) — a correct STOP earned the max 1.0 vs a cost-discounted solve ~0.7,
+so correct-STOP decisions dominated the BC reference's weighted clone and the whole
+controller drifted. Scaling STOP credit by `abstention_credit=0.5` fixes it offline
+(P(STOP) 0.47→0.004). Hypothesis B (representation: the linear policy can't separate
+unsolvable from solvable) is a contributing factor, not the primary cause — the harder-task
+P3 refinement (feature-separable underspecified tasks) addresses it. Live confirmation of
+the fixed KTO curve was running at the time of writing.
 
 ### P3. Limited allocation headroom on arithmetic
 On easy tasks a single WIDER suffices, so there's little to reallocate; that's partly why
@@ -274,11 +285,35 @@ precision plateaus without a real verifier). So fix the verifier first, then all
 
 ### Suggested sequence (cheapest, highest-leverage first)
 1. **Math-Shepherd rollout labels** → replace the verifier + fix the difficulty feature (A).
-2. **DAPO dynamic sampling + softer cost term** → lock in non-collapsing GRPO (B).
-3. **STaR class-balancing** → lock in non-drifting KTO (B).
-4. **AB-MCTS Thompson WIDER↔DEEPER + Snell interaction feature** → create real allocation
-   headroom now that the verifier signal is trustworthy (C).
+   Cache labels by `task_id + transcript_hash` so a given partial trajectory is only
+   forked once. Swap in for `difficulty = 1 - first_process_score` at runner.py:~63.
+2. **DAPO dynamic sampling** → in grpo_train, skip/down-weight all-solve and all-fail
+   groups (outcome variance first, cost second). Complements the std fix; kills residual
+   cost-jitter. Plus optionally a softer cost term.
+3. **AB-MCTS Thompson WIDER↔DEEPER** → per-task posterior from early attempts, as a router
+   and/or baseline alongside the bandit (C).
+4. **Harder, separable tasks** (see §5 P3 refinement) → real allocation headroom.
 5. **Power-law STOP rule** → principled cost lever / abstention (C).
+
+### Cross-check + refinements (independent second-tool analysis + our offline tests)
+An independent analysis converged on the SAME diagnosis (verifier-first; STOP-credit
+asymmetry; GRPO needs dynamic sampling; not enough allocation headroom; add AB-MCTS),
+which is strong corroboration. Net-new, actionable refinements from it:
+- **Cache Math-Shepherd labels by `task_id + transcript_hash`** (folded into step 1 above).
+- **Harder benchmark designs (refines P3):** add multi-step expression tasks, tasks with
+  *distractor tool errors*, tasks where DECOMPOSE is *structurally necessary*, and
+  underspecified variants that are *feature-separable* from normal-hard tasks — the last
+  gives the linear policy a real handle to gate STOP instead of conflating it.
+- **REJECTED after offline test — late-STOP efficiency discount.** Idea: discount a correct
+  abstention by `cost_efficiency(spent)` so early abstention beats late. Tested: it pushed
+  EVERY correct STOP (even early) to 0.35–0.49, below KTO's 0.5 desirability threshold,
+  neutralizing the abstention arm for ZERO gain on the collapse (BC 0.004 / KTO 0.002,
+  identical to the flat 0.5). Not worth the complexity + downside; STOP credit stays flat
+  at `abstention_credit * abstention_reward`. (Don't re-try without decoupling the threshold.)
+- *Note:* "class-balance desirable-STOP tags to the ~9% prior" was also suggested, but our
+  offline test showed removing the desirable-STOP TAGS changed nothing (P(STOP) stayed
+  0.51) — the driver was BC's value-per-cost WEIGHTING, which the abstention_credit fix
+  already addresses. So tag-balancing is unnecessary; credit-scaling is the right lever.
 
 ---
 
