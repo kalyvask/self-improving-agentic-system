@@ -19,8 +19,8 @@ policy from those traces, measure, repeat.
 
 1. Round 0: the `BanditAllocator` cold-starts with no data (Thompson sampling over
    per-action value-per-cost) and collects traces.
-2. Each later round: fit a fresh `BCAllocator` or `DPOAllocator` on all
-   accumulated traces, run it to collect more traces, and evaluate it on a
+2. Each later round: fit a fresh `BCAllocator`, `DPOAllocator`, or `KTOAllocator`
+   on all accumulated traces, run it to collect more traces, and evaluate it on a
    held-out task set.
 3. The per-round scoreboard (solve rate, mean / p95 cost, generation-verification
    gap) is the self-improvement curve.
@@ -35,6 +35,16 @@ between them is attributable to the learning objective, not model capacity:
 - `DPOAllocator`: preference learning. Fits a BC reference, mines preference pairs
   from realized value-per-cost, then runs the DPO objective against that
   reference.
+- `KTOAllocator`: unpaired preference learning. Tags each decision desirable or
+  undesirable by its value-per-cost and optimizes the Kahneman-Tversky objective
+  against the same BC reference, so it needs no preference pairs. This is the more
+  data-efficient option in the small-trace regime, where good pairs are scarce.
+
+Credit per decision is `terminal_reward * cost_efficiency * advantage`, where
+`cost_efficiency = exp(-cost_weight * spent/budget)` keeps decaying past budget so
+a cheap solve trains as strictly better than an expensive one. That cost signal is
+only sharp when the budget is set near the typical task spend; far above it the
+term is flat and the policy is effectively cost-blind.
 
 GRPO is estimated, not run. The loop logs the per-call token and wall cost GRPO
 would need, so the GRPO cost and expected ceiling are an extrapolation from
@@ -99,6 +109,38 @@ target reliability (default 50 percent). Included as an economic-value framing f
 when tasks carry a human-time estimate; it is a stub until a benchmark supplies
 those estimates.
 
+## Measurement rigor
+
+A small agent eval has very little statistical power, so a raw solve-rate
+difference between two policies is easy to over-read. `wdp/metrics` makes the
+uncertainty explicit and steers comparisons onto metrics that can actually resolve
+a difference at the sample sizes these runs produce. `scripts/analyze_eval.py`
+runs all of this offline on collected traces.
+
+- **Reliability and power (`reliability.py`).** Wilson confidence intervals on
+  every solve rate, the minimum detectable effect at the current sample size, the
+  number of tasks needed to detect a target lift, McNemar on paired binary
+  outcomes, and a paired bootstrap interval on per-task cost. At ten tasks the
+  minimum detectable solve-rate difference is large, so cost (continuous, paired,
+  low-variance) is the primary comparison and solve rate is read with its interval
+  rather than as a point.
+- **Item-response difficulty (`irt.py`).** A Rasch (1PL) fit over all responses
+  gives a calibrated per-task difficulty and the Fisher information each task
+  carries at the agent's ability, so a small eval can be chosen to be informative
+  instead of drawn at random.
+- **Verifier alt-test (`alt_test.py`).** The controller acts on a cheap process
+  verifier. The alternative-annotator test turns "is this judge good enough to act
+  on" into a pass/fail verdict against the ground-truth terminal verifier, rather
+  than an uncalibrated agreement number.
+
+## Results
+
+The evaluation harness above is in place; the headline numbers and graphs come
+from a powered run that is being collected now (a calibrated arithmetic sweep
+across the three learners, compared on paired cost). This section will be updated
+with the curve, the cost intervals, and the difficulty and verifier diagnostics
+once that run completes.
+
 ## Layout
 
 ```
@@ -106,21 +148,26 @@ src/wdp/
   config.py            .env + YAML config loading
   cost/                per-call cost accounting in three currencies
   llm/                 OpenRouter chat client with usage-based cost
-  allocator/           the policy core and four policies:
+  allocator/           the policy core and policies:
                          policy.py  Action, NodeFeatures, BanditAllocator (v0)
                          linear.py  shared CPU-trainable linear-softmax core
                          bc.py      BCAllocator (behavior cloning)
                          dpo.py     DPOAllocator (preference learning)
+                         kto.py     KTOAllocator (unpaired preference learning)
   verifier/            terminal (ground-truth) and process (cheap) scorers
   executor/            ReAct loop, tool protocol, Task/Trajectory types
   planner/             decomposability probe + sub-task DAG
   loop/                trace logging, credit assignment, round runner,
                        self-improvement driver
   metrics/             success@budget, pass^k, risk-coverage, CVaR, gen-verif gap
-  benchmarks/          Benchmark protocol + local checkable arithmetic suite
+                         reliability.py  Wilson CIs, power, McNemar, paired bootstrap
+                         irt.py          Rasch (1PL) task difficulty + information
+                         alt_test.py     alternative-annotator test for the verifier
+  benchmarks/          Benchmark protocol, local arithmetic suite, tau-bench adapter
   grpo/                GRPO cost estimator (measured per-rollout extrapolation)
 tests/                 offline end-to-end tests (no key, no network)
-scripts/               smoke_live, run_selfimprove, estimate_grpo
+scripts/               smoke_live, run_selfimprove, estimate_grpo,
+                       analyze_eval, offline_ablations, run_calibrated_arith_sweep
 config/default.yaml    models, budgets, allocator and loop settings
 ```
 
@@ -151,11 +198,29 @@ python scripts/smoke_live.py
 ```
 
 Self-improvement curve on the local arithmetic benchmark (costs credits, one
-Executor run per task per round):
+Executor run per task per round). Set the budget near the typical task spend so
+the cost signal is sharp:
 
 ```bash
-python scripts/run_selfimprove.py --learner bc --rounds 3
-python scripts/run_selfimprove.py --learner dpo --rounds 3 --budget 0.15
+python scripts/run_selfimprove.py --learner bc  --rounds 3 --budget 0.003
+python scripts/run_selfimprove.py --learner dpo --rounds 3 --budget 0.003
+python scripts/run_selfimprove.py --learner kto --rounds 3 --budget 0.003
+```
+
+The same loop runs against tau-bench retail or airline (multi-turn, env-graded):
+
+```bash
+python scripts/run_selfimprove.py --benchmark taubench --env retail \
+    --n-tasks 8 --rounds 2 --budget 0.50
+```
+
+Analyze collected traces offline, no credits (paired A/B, IRT difficulty, verifier
+alt-test, and the budget and difficulty ablations):
+
+```bash
+python scripts/analyze_eval.py --ab traces/calib_dpo.jsonl --irt traces/calib_*.jsonl
+python scripts/analyze_eval.py --verifier traces/calib_*.jsonl
+python scripts/offline_ablations.py --arith traces/calib_dpo.jsonl
 ```
 
 GRPO cost estimate from collected traces (offline, no credits):
@@ -167,7 +232,13 @@ python scripts/estimate_grpo.py --traces traces/traces.jsonl
 ## Benchmarks
 
 The repo ships a local `ArithmeticBenchmark` whose verifier is exact and free, so
-a full self-improvement run is cheap enough to iterate on a laptop. It mixes
-atomic tasks, multi-part decomposable tasks, and underspecified tasks where STOP
-is the only good move. Real benchmarks (tau-bench, SWE-bench, ALFWorld) implement
-the same `Benchmark` protocol: tasks, tools, and a terminal verifier.
+a full self-improvement run is cheap enough to iterate on a laptop and large enough
+to have statistical power. It mixes atomic tasks across a difficulty gradient,
+multi-part decomposable tasks (two to four sub-results, where DECOMPOSE has a real
+payoff), and underspecified tasks where STOP is the only good move.
+
+A tau-bench adapter (`benchmarks/taubench.py`) implements the same `Benchmark`
+protocol against the retail and airline domains: multi-turn, env-graded tasks with
+a live LLM user simulator. It is the realism check; the arithmetic suite is where a
+powered comparison is affordable. Other benchmarks (SWE-bench, ALFWorld) implement
+the same protocol: tasks, tools, and a terminal verifier.
