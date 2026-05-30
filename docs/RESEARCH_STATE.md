@@ -36,6 +36,49 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
   more multi solves, more cost), then DPO/KTO should learn WHEN decompose is worth it and bend
   the frontier back left. A flat-but-correct result is still possible; report honestly.
 
+## Next steps, pending actions, and ideas
+
+**Immediate (in flight / on landing of the calib2 sweep):**
+1. Analyze `traces/calib2_{bc,dpo,kto}.jsonl` (+ `_eval.jsonl`): DECOMPOSE solve count on
+   multi tasks (was 0), DECOMPOSE usage by task kind, solve_rate / solvable_solve_rate /
+   utility_rate, and PAIRED eval cost (bandit@r0 vs learner@r3 from the tagged eval traces)
+   vs the pre-fix `calib_*` sweep. Tools: `scripts/analyze_eval.py`, `scripts/offline_ablations.py`.
+2. Update `scripts/make_figures.py` to read the `calib2` + eval-trace files and refresh the
+   four `artifacts/*.png`; update README Results with the post-fix numbers.
+3. If DECOMPOSE now earns its keep and the frontier moves, that is the first real win -- write
+   it up honestly (likely "up and right" first, then DPO/KTO bend it back left).
+
+**Sequenced build path (the capstone), only after the above:**
+4. **ESCALATE to Opus as a 5th action** (task #54, deferred). Build, then run an escalation
+   headroom probe, then a paired comparison: DPO-cascade vs Haiku-only vs Opus-only, on COST.
+   Do this AFTER the solve_floor credit fix (already in) so the cost term doesn't suppress it.
+5. **tau-bench demonstration** with escalation + a better verifier, measured on paired cost --
+   tau-bench is where the capability gap is genuine (Opus >> Haiku). Expensive; gate.
+6. **Math-Shepherd rollout-difficulty** live run (gated, `--rollout-difficulty`) to test whether
+   a grounded difficulty signal raises DECOMPOSE-on-multi usage further. Isolate from #1.
+
+**Deferred / open (lower priority):**
+- STOP barely explored (bandit threshold too strict, policy.py) -- only matters if the ~9%
+  abstention arm matters; revisit if utility_rate lags solve_rate.
+- rollout-difficulty eval billing: if ever enabled on eval, precompute labels + report cost
+  separately (don't let the labeling ledger make eval look cheaper).
+- DPO pair-mining could be made explicitly lexicographic (solved > correct-abstention > failed,
+  then cheaper within class); solve_floor already pushes this direction.
+- GRPO: do NOT spend more -- it does not learn at this scale; keep as the estimated/contrast arm.
+
+**Research ideas (from the CS329A reading list, see Section 6):**
+- AB-MCTS Thompson WIDER<->DEEPER per-task posterior (self-adjusts to difficulty, no label).
+- Snell difficulty x action interaction feature; Large Language Monkeys power-law STOP rule.
+- Scale arithmetic n for real power (cheap, free grading) once a real effect appears.
+- Distill Math-Shepherd labels into a small cross-encoder verifier only if live per-step
+  scoring is needed.
+
+**The thesis result to aim for** (not "DPO beats KTO"): *a learned cost-aware cascade matches
+most of the strong-model solve rate while spending much closer to the cheap-model baseline.*
+
+**Housekeeping:** task #50 = delete this doc when the collaboration ends (it is marked TEMPORARY
+at the top); README Results + figures need a refresh once calib2 lands; never commit .env / traces.
+
 ## 0. Lessons learned / mistakes to avoid (READ FIRST)
 
 Hard-won, from finding ~8 real bugs. Most "the learner is bad / the design is weak"
