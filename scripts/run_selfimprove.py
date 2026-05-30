@@ -77,6 +77,11 @@ def main() -> None:
                     help="credit cost-efficiency steepness exp(-cost_weight*spent/budget)")
     ap.add_argument("--abstention-credit", type=float, default=0.5,
                     help="scale on correct-STOP credit; keep below the solve scale")
+    ap.add_argument("--rollout-difficulty", action="store_true",
+                    help="estimate difficulty from forked rollout success (Math-Shepherd); "
+                         "spends extra forked-attempt credits, cached per task")
+    ap.add_argument("--diff-rollouts", type=int, default=4,
+                    help="number of forked attempts per task for rollout difficulty")
     # Arithmetic-suite knobs.
     ap.add_argument("--atomic", type=int, default=8)
     ap.add_argument("--multi", type=int, default=6)
@@ -124,11 +129,20 @@ def main() -> None:
         verifier = LLMProcessVerifier(client, cfg["models"]["scorer"])
         terminal = bench.terminal_verifier()
 
+        # Optional Math-Shepherd rollout-grounded difficulty (spends forked-attempt
+        # credits; cached per task). Replaces the noisy 1-first_process_score proxy.
+        difficulty_fn = None
+        if args.rollout_difficulty:
+            from wdp.verifier.rollout import RolloutProcessVerifier
+            difficulty_fn = RolloutProcessVerifier(
+                executor, terminal, n_rollouts=args.diff_rollouts).difficulty
+
         reports = self_improve(
             train, eval_, executor, verifier, terminal,
             planner=planner, learner=args.learner, rounds=args.rounds,
             cfg=run_cfg, keep_fraction=cfg["loop"]["bc_keep_fraction"],
             seed=args.seed, fit_window=args.fit_window, trace_log=trace_log,
+            difficulty_fn=difficulty_fn,
         )
 
     print(f"\nself-improvement curve ({args.benchmark}/{args.learner}, "

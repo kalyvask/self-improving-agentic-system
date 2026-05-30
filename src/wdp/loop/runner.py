@@ -44,6 +44,7 @@ def _features(
     ledger: CostLedger,
     cfg: RunConfig,
     decomposability: float,
+    difficulty_override: float | None = None,
 ) -> NodeFeatures:
     scores = process_scores or [0.0]
     spent = ledger.amount(cfg.currency)
@@ -58,11 +59,16 @@ def _features(
     tool_error_rate = n_err / len(all_steps) if all_steps else 0.0
     n_done = sum(1 for t in trajectories if t.final_answer is not None)
     attempts_done_frac = n_done / len(trajectories) if trajectories else 0.0
-    # Difficulty pinned to the first attempt's process score (1 - first_score);
-    # 0.5 = unknown before any attempt has been scored. Unlike score_max (which
-    # rises as we improve) this stays put, so the policy can read intrinsic task
-    # hardness and condition WIDER-vs-DEEPER on it.
-    difficulty = (1.0 - process_scores[0]) if process_scores else 0.5
+    # Difficulty: prefer a rollout-grounded estimate (Math-Shepherd style, passed in
+    # as difficulty_override and fixed for the whole task) over the noisy
+    # 1 - first_process_score proxy. The proxy is the fallback when no grounded
+    # estimate is available; 0.5 = unknown before any attempt has been scored. Unlike
+    # score_max (which rises as we improve) difficulty stays put, so the policy reads
+    # intrinsic task hardness and conditions WIDER-vs-DEEPER on it.
+    if difficulty_override is not None:
+        difficulty = difficulty_override
+    else:
+        difficulty = (1.0 - process_scores[0]) if process_scores else 0.5
     return NodeFeatures(
         score_mean=float(statistics.fmean(scores)),
         score_max=float(max(scores)),
@@ -91,6 +97,7 @@ def run_task(
     policy_name: str = "bandit",
     explore: bool = False,
     update: bool = True,
+    difficulty_fn=None,
 ) -> TaskTrace:
     cfg = cfg or RunConfig()
     ledger = CostLedger()
@@ -99,13 +106,17 @@ def run_task(
     trajectories: list[Trajectory] = []
     process_scores: list[float] = []
     decomposability = planner.probe(task, parallel_group=None, ledger=ledger) if planner else 0.0
+    # Rollout-grounded difficulty (cached per task), fixed for the whole task; falls
+    # back to the 1-first_process_score proxy inside _features when not provided.
+    task_difficulty = difficulty_fn(task) if difficulty_fn is not None else None
 
     best_answer: str | None = None
     best_terminal = 0.0
 
     for step in range(cfg.max_decisions):
         feats = _features(trajectories, process_scores, ledger=ledger, cfg=cfg,
-                           decomposability=decomposability)
+                           decomposability=decomposability,
+                           difficulty_override=task_difficulty)
         decision = allocator.decide(feats, cfg.currency, explore=explore)
         cost_before = ledger.amount(cfg.currency)
 
@@ -236,13 +247,14 @@ def run_round(
     explore: bool = False,
     update: bool = True,
     trace_log=None,
+    difficulty_fn=None,
 ) -> list[TaskTrace]:
     """Run every task once; optionally append each trace to a TraceLog."""
     traces: list[TaskTrace] = []
     for task in tasks:
         tr = run_task(task, allocator, executor, verifier, terminal,
                       planner=planner, cfg=cfg, policy_name=policy_name,
-                      explore=explore, update=update)
+                      explore=explore, update=update, difficulty_fn=difficulty_fn)
         traces.append(tr)
         if trace_log is not None:
             trace_log.append(tr)

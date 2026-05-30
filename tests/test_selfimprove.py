@@ -202,6 +202,35 @@ def test_grpo_train_runs_with_fake_stack():
     assert "step" in format_grpo_curve(reports)
 
 
+def test_rollout_difficulty_grounds_and_caches():
+    # Math-Shepherd-style difficulty: fork N fresh attempts, grade with the free
+    # terminal verifier, difficulty = 1 - solve fraction. The fake stack always
+    # answers "42" which the GoldVerifier accepts, so every fork solves -> the
+    # easy task gets difficulty 0; results are cached (no re-forking).
+    from wdp.verifier.rollout import RolloutProcessVerifier
+    from wdp.cost import CostLedger
+    ex, pl, vf, tm = _stack()
+    rpv = RolloutProcessVerifier(ex, tm, n_rollouts=4)
+    task = Task(id="t0", prompt="q")
+    led = CostLedger()
+    assert rpv.difficulty(task, ledger=led) == 0.0      # all forks solve -> easy
+    spent_after_first = led.amount("dollars")
+    assert rpv.difficulty(task, ledger=led) == 0.0      # cached
+    assert led.amount("dollars") == spent_after_first   # no extra spend on cache hit
+
+
+def test_self_improve_accepts_rollout_difficulty():
+    from wdp.verifier.rollout import RolloutProcessVerifier
+    ex, pl, vf, tm = _stack()
+    rpv = RolloutProcessVerifier(ex, tm, n_rollouts=2)
+    train = [Task(id=f"tr{i}", prompt="q") for i in range(4)]
+    eval_ = [Task(id=f"ev{i}", prompt="q") for i in range(2)]
+    reports = self_improve(train, eval_, ex, vf, tm, planner=pl, learner="bc",
+                           rounds=1, cfg=RunConfig(max_decisions=3), seed=0,
+                           difficulty_fn=rpv.difficulty)
+    assert len(reports) == 2 and reports[1].policy == "bc"
+
+
 def test_arithmetic_benchmark_offline():
     b = ArithmeticBenchmark(n_atomic=3, n_multi=2, n_underspecified=1, seed=0)
     tasks = b.tasks()

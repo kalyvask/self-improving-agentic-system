@@ -61,6 +61,7 @@ def self_improve(
     seed: int | None = 0,
     fit_window: int | None = None,
     trace_log=None,
+    difficulty_fn=None,
 ) -> list[RoundReport]:
     cfg = cfg or RunConfig()
     accumulated: list[TaskTrace] = []
@@ -79,14 +80,14 @@ def self_improve(
         # not the exploring data-collection policy.
         ev = run_round(eval_tasks, alloc, executor, verifier, terminal,
                        planner=planner, cfg=cfg, policy_name=name,
-                       explore=False, update=False)
+                       explore=False, update=False, difficulty_fn=difficulty_fn)
         return summarize_round(ev, cfg.currency)
 
     # Round 0: bandit cold start.
     bandit = BanditAllocator(seed=seed)
     train_traces = run_round(train_tasks, bandit, executor, verifier, terminal,
                              planner=planner, cfg=cfg, policy_name="bandit",
-                             explore=True, trace_log=trace_log)
+                             explore=True, trace_log=trace_log, difficulty_fn=difficulty_fn)
     accumulated += train_traces
     reports.append(RoundReport(
         round=0, policy="bandit",
@@ -101,7 +102,7 @@ def self_improve(
         alloc.fit(_fit_set())
         train_traces = run_round(train_tasks, alloc, executor, verifier, terminal,
                                  planner=planner, cfg=cfg, policy_name=learner,
-                                 explore=True, trace_log=trace_log)
+                                 explore=True, trace_log=trace_log, difficulty_fn=difficulty_fn)
         accumulated += train_traces
         reports.append(RoundReport(
             round=r, policy=learner,
