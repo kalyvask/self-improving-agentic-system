@@ -94,7 +94,12 @@ def analyze_ab(path: str) -> None:
     ci = paired_diff_ci(deltas)
     mean_a = sum(cost(a[t]) for t in shared) / n
     mean_b = sum(cost(b[t]) for t in shared) / n
-    sig = "" if (ci.lo <= 0 <= ci.hi) else "  <-- excludes 0 (resolved!)"
+    if ci.lo <= 0 <= ci.hi:
+        sig = "  (straddles 0: not resolved)"
+    elif ci.hi < 0:
+        sig = "  <-- resolved CHEAPER (cost decrease)"
+    else:
+        sig = "  <-- resolved MORE EXPENSIVE (cost increase)"
     print(f"\n COST is the low-variance, paired metric with power at small n:")
     print(f"   mean cost {a_name}: {mean_a:.4f} | {b_name}: {mean_b:.4f}")
     print(f"   paired delta ({b_name}-{a_name}): {ci}{sig}")

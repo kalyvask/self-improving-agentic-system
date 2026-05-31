@@ -121,13 +121,16 @@ def self_improve(
 
 def format_curve(reports: list[RoundReport]) -> str:
     """One line per round: the self-improvement scoreboard, plain text."""
-    lines = [f"{'round':>5} {'policy':>7} {'solve':>6} {'mean_cost':>10} "
-             f"{'p95_cost':>10} {'gap':>6} {'traces':>7}"]
+    # Show utility_rate (solved OR correct-abstention), not gen_verif_gap: the gap is
+    # ~0 now that completed trajectories use the exact terminal grade as the process
+    # score, so it no longer measures the cheap verifier and is misleading on the curve.
+    lines = [f"{'round':>5} {'policy':>7} {'solve':>6} {'util':>6} {'mean_cost':>10} "
+             f"{'p95_cost':>10} {'traces':>7}"]
     for rep in reports:
         e = rep.eval
         lines.append(
             f"{rep.round:>5} {rep.policy:>7} {e['solve_rate']:>6.2f} "
-            f"{e['mean_cost']:>10.5f} {e['p95_cost']:>10.5f} "
-            f"{e['gen_verif_gap']:>6.2f} {rep.n_accumulated_traces:>7}"
+            f"{e.get('utility_rate', e['solve_rate']):>6.2f} "
+            f"{e['mean_cost']:>10.5f} {e['p95_cost']:>10.5f} {rep.n_accumulated_traces:>7}"
         )
     return "\n".join(lines)

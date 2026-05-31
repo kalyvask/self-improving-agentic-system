@@ -24,10 +24,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 COMMON="--benchmark arithmetic --atomic 60 --multi 40 --underspecified 10 \
-        --budget 0.003 --max-decisions 8 --rounds 3 --seed 0"
+        --budget 0.003 --max-decisions 8 --rounds 3 --seed 0 --overwrite"
 
 for LEARNER in bc dpo kto; do
   echo "=== $LEARNER ==="
   python scripts/run_selfimprove.py --learner "$LEARNER" $COMMON \
-      --out "traces/calib_${LEARNER}.jsonl"
+      --out "traces/calib2_${LEARNER}.jsonl"
 done

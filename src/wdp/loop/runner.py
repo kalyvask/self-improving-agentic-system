@@ -119,10 +119,12 @@ def run_task(
                            decomposability=decomposability,
                            difficulty_override=task_difficulty)
         decision = allocator.decide(feats, cfg.currency, explore=explore)
-        # Mask unavailable actions: without a planner, DECOMPOSE cannot run and would
-        # be logged as a zero-cost no-op (distorting tau-bench learning and cost).
-        # Re-pick the best available action from the same scores instead.
-        if decision.action == Action.DECOMPOSE and planner is None:
+        # Mask unavailable actions: DECOMPOSE cannot run without a planner (a logged
+        # no-op), and is structurally pointless on a non-decomposable task
+        # (decomposability == 0, e.g. atomic/underspecified). Allowing it there lets
+        # an exploratory decompose "succeed" on an atomic task and enter BC's kept
+        # set, teaching decompose-on-atomic. Re-pick the best available action.
+        if decision.action == Action.DECOMPOSE and (planner is None or feats.decomposability <= 0.0):
             avail = {a: v for a, v in decision.scores.items() if a != Action.DECOMPOSE}
             if avail:
                 decision = Decision(action=max(avail, key=avail.get), scores=decision.scores)
