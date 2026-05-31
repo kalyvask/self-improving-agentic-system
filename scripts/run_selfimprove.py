@@ -32,7 +32,7 @@ def _build_arithmetic(args, cfg, client):
     models = cfg["models"]
     bench = ArithmeticBenchmark(n_atomic=args.atomic, n_multi=args.multi,
                                 n_underspecified=args.underspecified,
-                                n_hard=args.hard, seed=args.seed)
+                                n_hard=args.hard, no_calc=args.no_calc, seed=args.seed)
     tasks = bench.tasks()
     train, eval_ = split(tasks, frac_train=args.frac_train, seed=args.seed)
     executor = Executor(client, models["cheap"], tools=bench.tools(),
@@ -96,6 +96,9 @@ def main() -> None:
     ap.add_argument("--hard", type=int, default=0,
                     help="number of hard multi-hop word problems (capability-limited; "
                          "non-decomposable, for the ESCALATE regime)")
+    ap.add_argument("--no-calc", action="store_true",
+                    help="withhold the calculator tool and use the small-number/long-chain "
+                         "hard variant (controlled capability gap for the ESCALATE test bed)")
     # tau-bench knobs.
     ap.add_argument("--env", default="retail", help="tau-bench domain: retail | airline")
     ap.add_argument("--tb-split", default="test", help="tau-bench task split: train | dev | test")

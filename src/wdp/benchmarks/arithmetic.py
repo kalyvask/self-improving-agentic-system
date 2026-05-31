@@ -98,6 +98,36 @@ def _hard_problem(rng: random.Random) -> tuple[str, int]:
     return prompt, int(val)
 
 
+def _hard_no_calc_problem(rng: random.Random) -> tuple[str, int]:
+    """A LONG chain of SMALL-number operations to be done WITHOUT a calculator,
+    ending in a conditional. Every single step is trivial; the difficulty is
+    carrying an accurate running total across 7-10 steps with no scratchpad tool.
+    Numbers stay small (and multiplication is limited to occasional doubling) so a
+    strong model tracks it reliably while a weak one accumulates a slip -- the
+    Opus-rescuable regime ESCALATE needs. Returns (prompt, exact-integer gold)."""
+    val = rng.randint(5, 15)
+    lines = [f"Start with the number {val}. Do the arithmetic in your head, "
+             f"step by step, with no tools."]
+    # bias heavily to +/- of small numbers; allow only occasional doubling so the
+    # running total stays bounded (~under 150) and the load is tracking, not products.
+    add_p = ["Add {n}.", "Increase it by {n}.", "Then add {n}.", "Now add {n} to it."]
+    sub_p = ["Subtract {n}.", "Decrease it by {n}.", "Then take away {n}.", "Now subtract {n}."]
+    dbl_p = ["Double it.", "Now multiply it by 2.", "Then double the result."]
+    n_ops = rng.randint(7, 10)
+    for _ in range(n_ops):
+        k = rng.choice(["add", "add", "add", "sub", "sub", "double"])
+        if k == "add":
+            n = rng.randint(2, 12); lines.append(rng.choice(add_p).format(n=n)); val += n
+        elif k == "sub":
+            n = rng.randint(2, 12); lines.append(rng.choice(sub_p).format(n=n)); val -= n
+        else:
+            lines.append(rng.choice(dbl_p)); val *= 2
+    t, h = rng.randint(40, 120), rng.randint(3, 12)
+    lines.append(f"Finally, if the result is greater than {t}, subtract {h}; otherwise add {h}.")
+    val = val - h if val > t else val + h
+    return " ".join(lines) + " FINISH with the final integer only.", int(val)
+
+
 class ArithmeticVerifier:
     """Terminal verifier: pass when the answer's last number matches gold.
 
@@ -128,14 +158,22 @@ class ArithmeticBenchmark:
     name = "arithmetic"
 
     def __init__(self, n_atomic: int = 8, n_multi: int = 6, n_underspecified: int = 2,
-                 n_hard: int = 0, seed: int = 0) -> None:
+                 n_hard: int = 0, no_calc: bool = False, seed: int = 0) -> None:
         self.n_atomic = n_atomic
         self.n_multi = n_multi
         self.n_underspecified = n_underspecified
         self.n_hard = n_hard
+        # no_calc: withhold the calculator tool AND switch the hard tier to the
+        # small-number / long-chain variant. This manufactures a CONTROLLED capability
+        # gap (careful step-tracking, not hard multiplication) to validate the ESCALATE
+        # machinery -- a strong model tracks a long chain reliably; a weak one slips.
+        # It is a mechanism test bed, not the headline thesis (tau-bench is that).
+        self.no_calc = no_calc
         self.seed = seed
 
     def tools(self) -> dict[str, Tool]:
+        if self.no_calc:
+            return {}      # force in-context computation: the capability stressor
         calc = make_tool("calc", "Evaluate an arithmetic expression, e.g. "
                                  'calc with action_input {"expr": "12*(7+5)"}.', _calc)
         return {calc.name: calc}
@@ -203,11 +241,13 @@ class ArithmeticBenchmark:
         # (ESCALATE) -- which is exactly the regime the capstone needs. Gold is an
         # exact integer computed by the same sequential semantics described in prose.
         for i in range(self.n_hard):
-            prompt, gold = _hard_problem(rng)
+            prompt, gold = (_hard_no_calc_problem(rng) if self.no_calc
+                            else _hard_problem(rng))
             out.append(Task(
                 id=f"hard-{i}",
                 prompt=prompt,
-                metadata={"gold": gold, "kind": "hard", "decomposability": 0.0},
+                metadata={"gold": gold, "kind": "hard", "decomposability": 0.0,
+                          "no_calc": self.no_calc},
             ))
 
         for i in range(self.n_underspecified):
