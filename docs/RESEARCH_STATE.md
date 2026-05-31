@@ -16,7 +16,32 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 
 ---
 
-## Current status (as of last commit 20220a8)
+## >>> PICK UP HERE (next session) <<<
+
+Latest commit on main: **1cfa1a9** (all pushed, 48 offline tests pass, tree clean).
+
+1. **A live post-fix arithmetic sweep was running** (bg `bd0zrv819`): bc/dpo/kto, 110 tasks,
+   budget 0.003, escalation OFF, outputs `traces/calib2_{bc,dpo,kto}.jsonl` (+ `_eval.jsonl`).
+   bc+dpo finished; kto was ~round 2 when context filled. **First check if it completed**
+   (`wc -l traces/calib2_kto.jsonl` should be 264; one python worker ~200MB = still running).
+   If it died, rerun ONLY the missing arm: `python scripts/run_selfimprove.py --learner kto
+   --benchmark arithmetic --atomic 60 --multi 40 --underspecified 10 --budget 0.003
+   --max-decisions 8 --rounds 3 --seed 0 --out traces/calib2_kto.jsonl --overwrite`.
+   ALWAYS confirm a SINGLE sweep wrapper (we hit duplicate-wrapper contamination before).
+2. **Then run the decisive analysis** (the whole point of this sweep -- DECOMPOSE can now solve
+   multi-part tasks, the feature separates them, and BC keeps DECOMPOSE successes):
+   - Does DECOMPOSE now SOLVE multi tasks (was 0 across all prior runs)? grep decompose+solved.
+   - DECOMPOSE usage by task kind; solve_rate / solvable_solve_rate / utility_rate per round.
+   - Paired eval cost: `python scripts/analyze_eval.py --ab traces/calib2_dpo_eval.jsonl`
+     (now compares bandit@r0 vs final learner round; prints CHEAPER/MORE EXPENSIVE direction).
+   - Compare to the PRE-fix `calib_*` sweep. Early read: cost rose (DECOMPOSE now exercised =
+     "up and right"); DPO showed ~28% cheaper-at-equal-solve in round 1 (noisy -- confirm w/ CI).
+3. **Refresh** `scripts/make_figures.py` to read `calib2*` + eval traces; update README Results.
+4. **Then the two deferred levers** (see Next steps section): STOP-exploration (top behavior
+   gap -- utility==solve until STOP is explored), then the ESCALATE capstone (task #54), then
+   tau-bench. Escalation stays OFF until the above shows whether the fixes moved the frontier.
+
+## Current status (latest commit 1cfa1a9)
 
 - **All 8 bugs fixed and committed; 47 offline tests pass.** Latest commits: cae1958 (DECOMPOSE
   synthesis + 4), 9c67b3b (utility/solvable metrics + eval-trace logging), 20220a8 (decomposability
