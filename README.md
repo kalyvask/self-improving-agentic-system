@@ -135,7 +135,28 @@ runs all of this offline on collected traces.
 
 ## Results
 
-Powered arithmetic sweep, 110 tasks (66 train / 44 eval), budget calibrated to
+**Headline: a learned cost-aware policy matches the cold-start bandit's solve rate at roughly
+half the cost.** On the calibrated arithmetic suite (110 tasks, 44-task eval), after fixing a
+family of credit/normalization/execution bugs and adding an abstention (STOP) rule, the DPO and
+KTO policies sit at ~$0.0015/task vs the bandit's ~$0.0029 at the same ~0.77 solve. The paired
+per-task cost delta is **−0.001 [−0.002, −0.001] (95% bootstrap CI excludes 0 → resolved)**,
+while solve rate is statistically tied (McNemar p=1.0). Cost is the metric with power at n=44;
+the learned policy spends it better, with a balanced WIDER/DEEPER/DECOMPOSE/STOP mix.
+
+![Cost / solve frontier](artifacts/cost_solve_frontier.png)
+*Mean cost (x) vs solve rate (y), greedy eval. The learned policies (DPO/KTO) move left of the
+cold-start bandit at the same solve height — cheaper for the same outcome. Solve-rate error bars
+are wide (Wilson, n=44); the resolved signal is on cost (paired), not solve.*
+
+Honest caveat: this run uses an aggressive abstain-after-2-failed-attempts rule, so raw solve is
+~0.77 (vs ~0.84 without it) — it trades a few solves on hard-but-solvable tasks for ~half the
+cost and higher utility (solved-or-correctly-abstained = 0.91). Tuning that threshold trades
+cost back for solve. Lifting the solve *ceiling* (~0.84, Haiku's capability) needs the planned
+ESCALATE-to-a-stronger-model action, not allocation alone.
+
+---
+
+Earlier powered sweep (pre-STOP-rule), 110 tasks (66 train / 44 eval), budget calibrated to
 ~2x the median task cost so the cost signal is active. Round 3 (final) eval:
 
 | policy | solve | mean cost | notes |

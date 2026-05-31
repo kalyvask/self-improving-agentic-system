@@ -190,7 +190,48 @@ def fig_cis():
     fig.tight_layout(); fig.savefig(ART / "measurement_cis.png", dpi=130); plt.close(fig)
 
 
+# ---- Figure 0 (headline): cost / solve frontier --------------------------
+def _arm(evalfile, tag):
+    ts = [t for t in _read(evalfile) if t.get("policy") == tag]
+    k = sum(_solved(t) for t in ts)
+    sc = wilson_ci(k, len(ts))
+    m, lo, hi = _boot_mean_ci([_cost(t) for t in ts])
+    return sc, (m, lo, hi)
+
+
+def fig_frontier():
+    """Headline: mean cost (x) vs solve rate (y). Lower-left-at-equal-height = better.
+    Cold-start bandit vs the learned policies (calib3, all fixes + STOP rule)."""
+    try:
+        pts = {
+            "bandit (cold start)": _arm("calib3_bc_eval.jsonl", "bandit@r0"),
+            "BC":  _arm("calib3_bc_eval.jsonl", "bc@r3"),
+            "DPO": _arm("calib3_dpo_eval.jsonl", "dpo@r3"),
+            "KTO": _arm("calib3_kto_eval.jsonl", "kto@r3"),
+        }
+    except (FileNotFoundError, ZeroDivisionError):
+        print("skip frontier: calib3 eval traces missing"); return
+    colors = {"bandit (cold start)": "#C44E52", "BC": "#8172B3",
+              "DPO": "#4C72B0", "KTO": "#55A868"}
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for name, (sc, (m, lo, hi)) in pts.items():
+        ax.errorbar(m, sc.point, xerr=[[m - lo], [hi - m]],
+                    yerr=[[sc.point - sc.lo], [sc.hi - sc.point]],
+                    fmt="o", ms=9, capsize=4, color=colors[name], label=name)
+        ax.annotate(name, (m, sc.point), textcoords="offset points", xytext=(8, 6), fontsize=9)
+    b = pts["bandit (cold start)"]; d = pts["DPO"]
+    ax.annotate("", xy=(d[1][0], d[0].point), xytext=(b[1][0], b[0].point),
+                arrowprops=dict(arrowstyle="->", color="gray", lw=1.5, ls="--"))
+    ax.text(0.5, 0.06, "learned policy: ~half the cost at the same solve",
+            transform=ax.transAxes, ha="center", color="gray", fontsize=9)
+    ax.set(xlabel="mean cost per task ($)", ylabel="solve rate (44-task eval)",
+           title="Cost / solve frontier: learned cost-aware policy beats the cold start")
+    ax.grid(alpha=0.3); ax.legend(loc="lower right")
+    fig.tight_layout(); fig.savefig(ART / "cost_solve_frontier.png", dpi=130); plt.close(fig)
+
+
 def main():
+    fig_frontier(); print("wrote cost_solve_frontier.png")
     fig_curves(); print("wrote self_improvement_curves.png")
     fig_collapse(); print("wrote collapse_and_fix.png")
     fig_action_mix(); print("wrote action_mix_drift.png")
