@@ -16,6 +16,21 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 
 ---
 
+## >>> RESULT OF THE calib2 SWEEP (read before picking up) <<<
+
+The post-fix sweep COMPLETED. **DECOMPOSE fix validated end-to-end:** decompose now solves
+50-81 multi-part tasks (bc=81, dpo=51, kto=52), vs **0 across every pre-fix run**. It is also
+actively chosen (88-107x). So the structural chain works: synthesis + separable feature +
+BC-keeps-successes.
+
+**BUT the aggregate frontier is still flat at n=44:** bandit/bc/dpo/kto all ~0.84 solve;
+DPO@r3 vs bandit@r0 paired cost delta -0.000 [-0.001, 0.001] (straddles 0, NOT resolved;
+McNemar p=1.0). Mean cost actually ROSE (~0.0031) because DECOMPOSE is now used and the
+synthesis pass costs more. **Diagnosis: the controller decomposes a lot but is not yet
+SELECTIVE** -- it solves multi tasks but does not net a cost win. The next lever is teaching
+selective decompose (only the hard multi) and/or ESCALATE; STOP-exploration still open.
+Solve is capped ~0.84 (Haiku ceiling), so cost is the only axis with headroom.
+
 ## >>> PICK UP HERE (next session) <<<
 
 Latest commit on main: **1cfa1a9** (all pushed, 48 offline tests pass, tree clean).
