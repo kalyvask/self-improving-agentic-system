@@ -77,10 +77,10 @@ Latest commit on main: **1cfa1a9** (all pushed, 48 offline tests pass, tree clea
    - **(c2) POST-calib3 review fixes (do before ESCALATE -- STOP-selectivity is the near frontier):**
      * DONE: DECOMPOSE-mask fallback no longer falls back to STOP (was manufacturing fake
        "learned STOP" / premature atomic stops; now picks best SPEND action). Commit pending.
-     * TODO **make DEEPER real**: `continue_from` is a no-op on an already-completed trajectory
-       (react treats final_answer as done), so DEEPER often = "one attempt", not refine. Either
-       implement "review+revise the completed answer" or make DEEPER fall back to WIDER when the
-       target is done. Likely lifts hard-atomic solve at little cost. (runner.py continue_from path)
+     * PARTIAL: **DEEPER semantics fixed** (runner) -- now continues a genuinely-unfinished
+       trajectory, else does a fresh attempt (WIDER-equiv) instead of a wasted no-op continue_from.
+       STILL TODO (the impactful half): a true "review+revise the completed answer" mode so DEEPER
+       can fix a wrong final answer -- needs executor/react support; likely lifts hard-atomic solve.
      * TODO **gate learned STOP by evidence** (decomp==0 & n_children>=k & score_max<=eps & no
        progress) so the POLICY can only pick STOP when warranted -- removes premature DPO/KTO stops.
      * TODO **STOP-gating ablation** (offline-ish): estimate the upper bound -- replacing DPO's ~4

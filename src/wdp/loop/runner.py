@@ -170,13 +170,22 @@ def run_task(
             trajectories.append(new_traj)
 
         elif decision.action == Action.DEEPER:
-            target = _deepest_unfinished(trajectories) or (
-                executor.run(task, ledger=ledger, parallel_group=pg))
-            if target not in trajectories:
-                trajectories.append(target)
-            new_traj = executor.continue_from(
-                task, target, ledger=ledger, parallel_group=pg,
-                extra_steps=cfg.deeper_extra_steps)
+            # DEEPER should refine an UNFINISHED trajectory. The old code, when none
+            # was unfinished, ran a fresh attempt and then continue_from on it -- but
+            # continue_from is a no-op on an already-done trajectory (react stops on a
+            # final answer), so DEEPER silently did "one fresh attempt + nothing", i.e.
+            # it was not actually deeper. Make it honest: continue genuine unfinished
+            # work; otherwise fall back to a fresh attempt (WIDER-equivalent) instead of
+            # the wasted no-op. (Future: a true "review and revise the completed answer"
+            # mode would let DEEPER lift hard-atomic solve -- needs executor support.)
+            target = _deepest_unfinished(trajectories)
+            if target is not None:
+                new_traj = executor.continue_from(
+                    task, target, ledger=ledger, parallel_group=pg,
+                    extra_steps=cfg.deeper_extra_steps)
+            else:
+                new_traj = executor.run(task, ledger=ledger, parallel_group=pg)
+                trajectories.append(new_traj)
 
         elif decision.action == Action.DECOMPOSE and planner is not None:
             new_traj = _run_decompose(task, planner, executor, ledger, pg)
