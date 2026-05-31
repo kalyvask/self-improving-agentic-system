@@ -153,6 +153,29 @@ def analyze_verifier(paths: list[str]) -> None:
     print(" " + str(best_threshold(scores, truth, epsilon=0.05)).replace("\n", "\n "))
 
 
+def analyze_stops(paths: list[str], policy: str | None = None) -> None:
+    """STOP selectivity: split STOP decisions into CORRECT (abstained on an unsolvable
+    task) vs PREMATURE (gave up on a solvable one). The goal of STOP-gating is to cut
+    premature stops while keeping correct underspecified abstention -- a single utility
+    number hides this. Pass --stops-policy to filter to one round tag (e.g. dpo@r3)."""
+    for p in paths:
+        per = defaultdict(lambda: [0, 0, 0])   # pol -> [correct_stop, premature_stop, n_stop_traces]
+        for t in TraceLog(p).read():
+            if policy and t.policy != policy:
+                continue
+            stopped = any(d.action == "stop" for d in t.decisions)
+            if not stopped:
+                continue
+            unsolvable = (not (t.solved or t.terminal_reward >= 0.99)) and t.abstention_reward >= 0.5
+            per[t.policy][0 if unsolvable else 1] += 1
+            per[t.policy][2] += 1
+        print(f"=== STOP selectivity | {p} ===")
+        for pol, (cor, prem, n) in sorted(per.items()):
+            print(f"  {pol:>10}: correct_STOP={cor}  premature_STOP={prem}  (of {n} STOP traces)")
+        if not per:
+            print("  (no STOP traces)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ab", help="paired trace file with exactly two policies")
@@ -160,6 +183,9 @@ def main() -> None:
                     help="trace files to pool for the IRT difficulty fit")
     ap.add_argument("--verifier", nargs="*", default=[],
                     help="trace files to pool for the ProcessVerifier alt-test")
+    ap.add_argument("--stops", nargs="*", default=[],
+                    help="trace files: split STOP into correct vs premature")
+    ap.add_argument("--stops-policy", default=None, help="filter --stops to one policy tag")
     args = ap.parse_args()
     if args.ab:
         analyze_ab(args.ab)
@@ -167,8 +193,10 @@ def main() -> None:
         analyze_irt(args.irt)
     if args.verifier:
         analyze_verifier(args.verifier)
-    if not args.ab and not args.irt and not args.verifier:
-        ap.error("pass --ab, --irt, and/or --verifier")
+    if args.stops:
+        analyze_stops(args.stops, args.stops_policy)
+    if not (args.ab or args.irt or args.verifier or args.stops):
+        ap.error("pass --ab, --irt, --verifier, and/or --stops")
 
 
 if __name__ == "__main__":
