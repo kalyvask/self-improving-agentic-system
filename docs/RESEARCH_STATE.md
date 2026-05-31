@@ -86,16 +86,23 @@ some Haiku config solves every solvable arithmetic task: a stronger model has no
 and a live ESCALATE run on arithmetic would produce a NULL result by construction. The oracle
 diagnostic just saved that spend.
 
-**Revised next lever: do NOT run ESCALATE on arithmetic.** The cost thesis is DONE on arithmetic
-(k=3: same solve, ~40% cheaper, resolved). ESCALATE only demonstrates value where the base model
-genuinely FAILS some tasks (capability_ceiling > 0). Two honest options, pick per time budget:
-  (a) **ESCALATE on tau-bench** (the realistic, harder env) -- first run the SAME `--oracle` check on
-      the existing tau-bench Haiku traces; if capability_ceiling > 0 there, ESCALATE has real
-      headroom and that is the capstone. This is the recommended path.
-  (b) **Harder arithmetic tier** (bigger operands / more parts) sized so Haiku fails ~20-30%, then
-      ESCALATE -- cheaper to run but a synthetic ceiling, less compelling than tau-bench.
-Win condition either way: solve rises above the single-model ceiling at a cost the policy chose to
-pay ONLY on the tasks the oracle flagged as capability-limited.
+**Revised next lever: do NOT run ESCALATE on arithmetic OR the current tau-bench set.** Oracle
+check is now run on BOTH: arithmetic capability_ceiling=0 (1 recoverable miss over 10 Haiku
+policy-rounds) AND tau-bench capability_ceiling=0 (7 tasks, all recoverable; n=7 is also far too
+small -- MDE +0.68). **No benchmark in the repo has a real capability ceiling**, so ESCALATE (and
+any Opus judge in front of it) has nothing to demonstrate. The cost thesis is DONE on arithmetic
+(k=3). The real PREREQUISITE for the capstone is **a harder benchmark tier where Haiku fails
+~20-40%** (Step 0 in `docs/ESCALATE_DESIGN.md`), gated by re-running `--oracle` until
+capability_ceiling lands in that band.
+
+**ESCALATE design is written: `docs/ESCALATE_DESIGN.md`** -- the validated answer to the
+"Opus-judge-before-escalation" question. Verdict: an Opus judge in the LIVE loop is invalid here
+(free ground truth makes it pure cost; judge tier > execution tier inverts cascade economics). The
+correct form is **Opus as an OFFLINE labeler** (never in the live ledger): label which
+capability-ceiling tasks a stronger model actually solves -> train the 5-action policy on CHEAP
+features -> alt-test the cheap escalate signal vs Opus labels -> live eval with the win condition
+"solve above the single-model ceiling at a cost paid only on capability-limited tasks," beating a
+feature-only router baseline. Reuses `rollout.py` labeling_ledger, `alt_test.py`, `--oracle`.
 
 **Done this session (offline, pushed):** `analyze_eval.py` gained `--oracle` (miss classification)
 and folded solvable_solve / utility / premature_stop into the `--ab` headline; a DEEPER-semantics
