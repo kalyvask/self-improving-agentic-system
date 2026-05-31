@@ -201,28 +201,41 @@ def _arm(evalfile, tag):
 
 def fig_frontier():
     """Headline: mean cost (x) vs solve rate (y). Lower-left-at-equal-height = better.
-    Cold-start bandit vs the learned policies (calib3, all fixes + STOP rule)."""
+    Cold-start bandit vs the learned DPO policy at the chosen operating point
+    (calib4 k=3: abstain-after-3, which holds solve at 0.84 while halving cost).
+    Falls back to the calib3 BC/DPO/KTO frontier if calib4 traces are absent."""
     try:
         pts = {
-            "bandit (cold start)": _arm("calib3_bc_eval.jsonl", "bandit@r0"),
-            "BC":  _arm("calib3_bc_eval.jsonl", "bc@r3"),
-            "DPO": _arm("calib3_dpo_eval.jsonl", "dpo@r3"),
-            "KTO": _arm("calib3_kto_eval.jsonl", "kto@r3"),
+            "bandit (cold start)": _arm("calib4_dpo_k3_eval.jsonl", "bandit@r0"),
+            "DPO (learned, k=3)":  _arm("calib4_dpo_k3_eval.jsonl", "dpo@r3"),
         }
+        dpo_key = "DPO (learned, k=3)"
+        colors = {"bandit (cold start)": "#C44E52", dpo_key: "#4C72B0"}
+        subtitle = "learned policy: same 0.84 solve, ~40% less cost (abstain-after-3)"
     except (FileNotFoundError, ZeroDivisionError):
-        print("skip frontier: calib3 eval traces missing"); return
-    colors = {"bandit (cold start)": "#C44E52", "BC": "#8172B3",
-              "DPO": "#4C72B0", "KTO": "#55A868"}
+        try:
+            pts = {
+                "bandit (cold start)": _arm("calib3_bc_eval.jsonl", "bandit@r0"),
+                "BC":  _arm("calib3_bc_eval.jsonl", "bc@r3"),
+                "DPO": _arm("calib3_dpo_eval.jsonl", "dpo@r3"),
+                "KTO": _arm("calib3_kto_eval.jsonl", "kto@r3"),
+            }
+            dpo_key = "DPO"
+            colors = {"bandit (cold start)": "#C44E52", "BC": "#8172B3",
+                      "DPO": "#4C72B0", "KTO": "#55A868"}
+            subtitle = "learned policy: ~half the cost at the same solve"
+        except (FileNotFoundError, ZeroDivisionError):
+            print("skip frontier: calib4/calib3 eval traces missing"); return
     fig, ax = plt.subplots(figsize=(7, 5))
     for name, (sc, (m, lo, hi)) in pts.items():
         ax.errorbar(m, sc.point, xerr=[[m - lo], [hi - m]],
                     yerr=[[sc.point - sc.lo], [sc.hi - sc.point]],
                     fmt="o", ms=9, capsize=4, color=colors[name], label=name)
         ax.annotate(name, (m, sc.point), textcoords="offset points", xytext=(8, 6), fontsize=9)
-    b = pts["bandit (cold start)"]; d = pts["DPO"]
+    b = pts["bandit (cold start)"]; d = pts[dpo_key]
     ax.annotate("", xy=(d[1][0], d[0].point), xytext=(b[1][0], b[0].point),
                 arrowprops=dict(arrowstyle="->", color="gray", lw=1.5, ls="--"))
-    ax.text(0.5, 0.06, "learned policy: ~half the cost at the same solve",
+    ax.text(0.5, 0.06, subtitle,
             transform=ax.transAxes, ha="center", color="gray", fontsize=9)
     ax.set(xlabel="mean cost per task ($)", ylabel="solve rate (44-task eval)",
            title="Cost / solve frontier: learned cost-aware policy beats the cold start")

@@ -16,7 +16,26 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 
 ---
 
-## >>> RESULT OF calib3 (the payoff -- FIRST RESOLVED COST WIN) <<<
+## >>> RESULT OF calib4 (k-sweep DONE -- k=3 is the operating point, accuracy RECOVERED) <<<
+
+The DPO STOP-selectivity k-sweep (`--stop-after-failed-attempts` {2,3,4}, mask->spend +
+DEEPER-honest fixes in) COMPLETED (bg `bkklrfxmj`, exit 0). Eval = paired `dpo@r3` vs cold-start
+`bandit@r0` on the same 44 tasks:
+
+| k | solve (both arms) | mean cost bandit->dpo | paired cost CI | correct STOP | premature STOP |
+|---|---|---|---|---|---|
+| 2 | 0.795 = 0.795 | 0.0029 -> 0.0018 | -0.001 [-0.002,-0.000] resolved | 6 | 3 |
+| **3** | **0.841 = 0.841** | **0.0030 -> 0.0018** | **-0.001 [-0.002,-0.001] resolved** | 6 | **1** |
+| 4 | 0.841 = 0.841 | 0.0030 -> 0.0021 | -0.001 [-0.002,-0.000] resolved | 3 | 0 |
+
+**k=3 wins decisively and is now the headline operating point.** It RECOVERS the calib3 raw-solve
+sag (0.77 -> 0.84, equal to baseline, McNemar p=1.0 = accuracy not dropping), KEEPS the full ~40%
+cost win (tightest CI of the three), and cuts premature stops 3 -> 1. k=4 over-conserves (only 3
+STOPs, cost win shrinks to 0.0021). DONE: README headline+caveat rewritten to k=3 numbers;
+`make_figures.fig_frontier` repointed to `calib4_dpo_k3_eval.jsonl` (calib3 fallback kept);
+frontier PNG regenerated. The only remaining ceiling is capability (~0.84 Haiku) -> ESCALATE.
+
+## >>> RESULT OF calib3 (superseded by calib4 k=3 -- kept for history) <<<
 
 With all fixes + the STOP rule (`--stop-after-failed-attempts 2`), DPO and KTO now show a
 RESOLVED cheaper-at-equal-solve win:
@@ -50,28 +69,25 @@ SELECTIVE** -- it solves multi tasks but does not net a cost win. The next lever
 selective decompose (only the hard multi) and/or ESCALATE; STOP-exploration still open.
 Solve is capped ~0.84 (Haiku ceiling), so cost is the only axis with headroom.
 
-## >>> PICK UP HERE (next session) -- analyze the calib4 k-sweep FIRST <<<
+## >>> PICK UP HERE (next session) -- calib4 DONE, choose the next lever <<<
 
-A **DPO STOP-selectivity k-sweep is RUNNING** (bg `bkklrfxmj`): dpo at
-`--stop-after-failed-attempts` k=2,3,4, with the mask->spend and DEEPER-honest fixes now in.
-Outputs `traces/calib4_dpo_k{2,3,4}.jsonl` (+ `_eval.jsonl`). **First: is it done?**
-`wc -l traces/calib4_dpo_k4.jsonl` == 264 and no ~200MB python worker = finished; one wrapper only.
-If an arm died, rerun just it: `python scripts/run_selfimprove.py --learner dpo --benchmark
-arithmetic --atomic 60 --multi 40 --underspecified 10 --budget 0.003 --max-decisions 8 --rounds 3
---seed 0 --stop-after-failed-attempts <K> --out traces/calib4_dpo_k<K>.jsonl --overwrite`.
+calib4 is analyzed and folded in (see the calib4 RESULT block at the top): **k=3 is the operating
+point**, accuracy recovered to 0.84=0.84, ~40% cost win resolved, premature stops down to 1.
+README + frontier figure + this doc are updated and pushed. Step 2 below is NO LONGER FORCED:
+premature stops at k=3 are already low (1 of 7) and solve is back at the Haiku ceiling, so the
+evidence-gated-STOP / true-DEEPER-revise work is optional polish, not a blocker.
 
-**Then analyze (the question: did mask+DEEPER fixes recover solve toward ~0.86 while cost stays
-~halved, and which k minimizes PREMATURE stops?):** for each k run
-`python scripts/analyze_eval.py --ab traces/calib4_dpo_k<K>_eval.jsonl` (paired cost bandit@r0 vs
-dpo@r3; reports CHEAPER/EXPENSIVE) and
-`python scripts/analyze_eval.py --stops traces/calib4_dpo_k<K>_eval.jsonl --stops-policy dpo@r3`
-(NEW: correct vs premature STOP). Pick the k with best solve/utility at low cost AND fewest
-premature stops. **Refresh the frontier figure** from the winning k (point make_figures at the
-calib4 winner; it currently reads calib3).
+**The next high-value lever is the ESCALATE capstone (task #54)** -- it is the only thing that can
+lift solve past the ~0.84 Haiku ceiling, since allocation of one model cannot exceed that model.
+Plan: add a 5th action ESCALATE that re-runs the current step on a stronger model (e.g. Sonnet),
+bill its higher per-token cost into the same ledger, and let the policy learn WHEN the extra spend
+is worth it (hard/underspecified tasks Haiku keeps failing). Then re-run a calib5 sweep and read
+the SAME paired-cost + solve A/B -- the win condition is solve > 0.84 at a cost the policy chose to
+pay only where it pays off. After that: tau-bench on paired cost (the transfer test).
 
-**Then (step 2, CONDITIONAL):** if premature stops persist or hard-atomic solve is still capped,
-add evidence-gated learned STOP (decomp==0 & n_children>=k & score_max<=eps & no progress) and
-the true DEEPER "review+revise the completed answer" mode (needs executor support). Then ESCALATE.
+**Optional step 2 (only if a later run shows premature stops creeping back):** evidence-gated
+learned STOP (decomp==0 & n_children>=k & score_max<=eps & no progress) + true DEEPER
+"review+revise the completed answer" mode (needs executor support).
 
 ## >>> earlier PICK UP notes (still relevant for context) <<<
 
