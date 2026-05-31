@@ -98,13 +98,21 @@ def _hard_problem(rng: random.Random) -> tuple[str, int]:
     return prompt, int(val)
 
 
-def _hard_no_calc_problem(rng: random.Random) -> tuple[str, int]:
-    """A LONG chain of SMALL-number operations to be done WITHOUT a calculator,
-    ending in a conditional. Every single step is trivial; the difficulty is
-    carrying an accurate running total across 7-10 steps with no scratchpad tool.
-    Numbers stay small (and multiplication is limited to occasional doubling) so a
-    strong model tracks it reliably while a weak one accumulates a slip -- the
-    Opus-rescuable regime ESCALATE needs. Returns (prompt, exact-integer gold)."""
+# Chain-length bands for the no-calc tier. The difficulty is carrying an accurate
+# running total over N steps with no scratchpad tool, so longer chain = harder. The
+# bands are chosen so a weak cheap model (Llama-3.1-8B) spans roughly easy~0.9 /
+# medium~0.6 / hard~0.25 while the strong target (Haiku-4.5) stays near-ceiling --
+# giving the controller a LEARNABLE escalation signal (escalate the long ones) rather
+# than a uniform coin-flip where escalation can only fire at random.
+_NOCALC_BANDS = {"easy": (2, 3), "medium": (5, 6), "hard": (9, 12)}
+
+
+def _hard_no_calc_problem(rng: random.Random,
+                          difficulty: str = "hard") -> tuple[str, int, int]:
+    """A chain of SMALL-number operations done WITHOUT a calculator, ending in a
+    conditional. Every step is trivial; difficulty is tracking the running total over
+    `difficulty`-many steps with no tool. Returns (prompt, exact-integer gold, n_ops)."""
+    lo, hi = _NOCALC_BANDS[difficulty]
     val = rng.randint(5, 15)
     lines = [f"Start with the number {val}. Do the arithmetic in your head, "
              f"step by step, with no tools."]
@@ -113,7 +121,7 @@ def _hard_no_calc_problem(rng: random.Random) -> tuple[str, int]:
     add_p = ["Add {n}.", "Increase it by {n}.", "Then add {n}.", "Now add {n} to it."]
     sub_p = ["Subtract {n}.", "Decrease it by {n}.", "Then take away {n}.", "Now subtract {n}."]
     dbl_p = ["Double it.", "Now multiply it by 2.", "Then double the result."]
-    n_ops = rng.randint(7, 10)
+    n_ops = rng.randint(lo, hi)
     for _ in range(n_ops):
         k = rng.choice(["add", "add", "add", "sub", "sub", "double"])
         if k == "add":
@@ -125,7 +133,7 @@ def _hard_no_calc_problem(rng: random.Random) -> tuple[str, int]:
     t, h = rng.randint(40, 120), rng.randint(3, 12)
     lines.append(f"Finally, if the result is greater than {t}, subtract {h}; otherwise add {h}.")
     val = val - h if val > t else val + h
-    return " ".join(lines) + " FINISH with the final integer only.", int(val)
+    return " ".join(lines) + " FINISH with the final integer only.", int(val), n_ops
 
 
 class ArithmeticVerifier:
@@ -240,15 +248,21 @@ class ArithmeticBenchmark:
         # are NOT separable, so the ONLY lever that lifts them is a more capable model
         # (ESCALATE) -- which is exactly the regime the capstone needs. Gold is an
         # exact integer computed by the same sequential semantics described in prose.
+        # no_calc hard tier is GRADED across easy/medium/hard chain lengths (cycled by
+        # index) so the cheap model's solve rate correlates with a real difficulty axis
+        # -- the basis for SELECTIVE escalation. The calc hard tier stays uniform.
+        bands = ("easy", "medium", "hard")
         for i in range(self.n_hard):
-            prompt, gold = (_hard_no_calc_problem(rng) if self.no_calc
-                            else _hard_problem(rng))
-            out.append(Task(
-                id=f"hard-{i}",
-                prompt=prompt,
-                metadata={"gold": gold, "kind": "hard", "decomposability": 0.0,
-                          "no_calc": self.no_calc},
-            ))
+            if self.no_calc:
+                diff = bands[i % 3]
+                prompt, gold, n_ops = _hard_no_calc_problem(rng, diff)
+                meta = {"gold": gold, "kind": "hard", "decomposability": 0.0,
+                        "no_calc": True, "difficulty": diff, "n_ops": n_ops}
+            else:
+                prompt, gold = _hard_problem(rng)
+                meta = {"gold": gold, "kind": "hard", "decomposability": 0.0,
+                        "no_calc": False}
+            out.append(Task(id=f"hard-{i}", prompt=prompt, metadata=meta))
 
         for i in range(self.n_underspecified):
             out.append(Task(
