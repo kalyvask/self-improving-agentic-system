@@ -16,7 +16,26 @@ Course: Stanford CS329A (Self-Improving AI Agents). Reading list:
 
 ---
 
-## >>> RESULT OF THE calib2 SWEEP (read before picking up) <<<
+## >>> RESULT OF calib3 (the payoff -- FIRST RESOLVED COST WIN) <<<
+
+With all fixes + the STOP rule (`--stop-after-failed-attempts 2`), DPO and KTO now show a
+RESOLVED cheaper-at-equal-solve win:
+- **paired eval cost bandit@r0 0.0029 -> dpo@r3 0.0015, delta -0.001 [-0.002, -0.001] (excludes
+  0 = resolved CHEAPER)**; solve 0.75 vs 0.77 (McNemar p=1.0, same); p95 cost 0.0087 -> 0.0026.
+- KTO similar (~0.0013). Self-improvement curve bends DOWN-LEFT across rounds (dpo cost
+  0.00287 r0 -> 0.00148 r3 at stable solve/util).
+- Action mix healthy, NOT collapsed: dpo {deeper .43, wider .25, stop .20, decompose .12};
+  STOP 0 -> 0.20 (the rule saved budget AND seeded learning). utility_rate 0.89 -> 0.91.
+- Tradeoff to report honestly: raw solve is ~0.77 (down from calib2's 0.84) because the k=2
+  STOP rule abstains on some solvable-but-hard tasks after 2 attempts; cost halved and utility
+  rose in exchange. Tuning k higher trades cost back for solve. Solve itself is unresolved at
+  n=44 (cost is the metric with power).
+- **This is the thesis result:** a learned cost-aware policy that matches the baseline's solve
+  at ~half the cost, with a sensible WIDER/DEEPER/DECOMPOSE/STOP mix. Next: refresh README
+  Results + figures (`make_figures.py` -> read calib3*), then the ESCALATE capstone to push
+  solve past the ~0.84 Haiku ceiling, then tau-bench on paired cost.
+
+## >>> RESULT OF THE calib2 SWEEP (earlier; DECOMPOSE fix validated) <<<
 
 The post-fix sweep COMPLETED. **DECOMPOSE fix validated end-to-end:** decompose now solves
 50-81 multi-part tasks (bc=81, dpo=51, kto=52), vs **0 across every pre-fix run**. It is also
