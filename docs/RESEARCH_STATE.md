@@ -74,6 +74,21 @@ Latest commit on main: **1cfa1a9** (all pushed, 48 offline tests pass, tree clea
      --max-decisions 8 --rounds 3 --seed 0 --stop-after-failed-attempts 2 --out
      traces/calib3_${L}.jsonl --overwrite; done`. Expect ~0.84 solve at LOWER cost (mask) + STOP
      catching the ~6 underspecified eval tasks (utility up, cost down). Headline = PAIRED COST.
+   - **(c2) POST-calib3 review fixes (do before ESCALATE -- STOP-selectivity is the near frontier):**
+     * DONE: DECOMPOSE-mask fallback no longer falls back to STOP (was manufacturing fake
+       "learned STOP" / premature atomic stops; now picks best SPEND action). Commit pending.
+     * TODO **make DEEPER real**: `continue_from` is a no-op on an already-completed trajectory
+       (react treats final_answer as done), so DEEPER often = "one attempt", not refine. Either
+       implement "review+revise the completed answer" or make DEEPER fall back to WIDER when the
+       target is done. Likely lifts hard-atomic solve at little cost. (runner.py continue_from path)
+     * TODO **gate learned STOP by evidence** (decomp==0 & n_children>=k & score_max<=eps & no
+       progress) so the POLICY can only pick STOP when warranted -- removes premature DPO/KTO stops.
+     * TODO **STOP-gating ablation** (offline-ish): estimate the upper bound -- replacing DPO's ~4
+       premature atomic STOPs with successful sequences ~= solve 0.86 / utility 1.0 at ~same cost.
+       Run this BEFORE escalate; it shows STOP selectivity, not capability, is the immediate gain.
+     * Use **DPO** as the base policy (KTO dropped DECOMPOSE + over-stops); fix make_figures curve
+       parser (reads `util` as cost on new logs) + repoint non-headline figs to calib3; update
+       run_calibrated_arith_sweep.sh to calib3 + `--stop-after-failed-attempts 2`.
    - **(d) THEN ESCALATE capstone** (task #54): the only lever past the ~0.84 Haiku ceiling;
      learn cheap-Haiku-first, Opus-only-when-stuck; then tau-bench on paired cost.
    Validate each fix offline before the rerun (recompute/refit on existing traces where possible).

@@ -143,7 +143,12 @@ def run_task(
         # an exploratory decompose "succeed" on an atomic task and enter BC's kept
         # set, teaching decompose-on-atomic. Re-pick the best available action.
         if decision.action == Action.DECOMPOSE and (planner is None or feats.decomposability <= 0.0):
-            avail = {a: v for a, v in decision.scores.items() if a != Action.DECOMPOSE}
+            # Fall back to the best SPEND action (exclude STOP): otherwise a masked
+            # DECOMPOSE whose next-highest score is STOP silently becomes an abstention,
+            # manufacturing fake "learned STOP" (premature stops on atomic tasks). STOP
+            # must come from the policy genuinely ranking it first, or the evidence rule.
+            avail = {a: v for a, v in decision.scores.items()
+                     if a not in (Action.DECOMPOSE, Action.STOP)}
             if avail:
                 decision = Decision(action=max(avail, key=avail.get), scores=decision.scores)
         cost_before = ledger.amount(cfg.currency)
