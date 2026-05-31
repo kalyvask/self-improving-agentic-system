@@ -30,15 +30,20 @@ from wdp.loop import RunConfig, TraceLog, self_improve, format_curve
 def _build_arithmetic(args, cfg, client):
     """Local arithmetic suite: cheap, fully offline-gradable, DECOMPOSE applies."""
     models = cfg["models"]
+    # --cheap-model overrides the executor+planner model WITHOUT editing the config,
+    # so capability-gap probes (weak cheap model -> strong ESCALATE target) can't
+    # silently contaminate the committed config/default.yaml. Falls back to cheap.
+    exec_model = args.cheap_model or models["cheap"]
     bench = ArithmeticBenchmark(n_atomic=args.atomic, n_multi=args.multi,
                                 n_underspecified=args.underspecified,
                                 n_hard=args.hard, no_calc=args.no_calc, seed=args.seed)
     tasks = bench.tasks()
     train, eval_ = split(tasks, frac_train=args.frac_train, seed=args.seed)
-    executor = Executor(client, models["cheap"], tools=bench.tools(),
+    executor = Executor(client, exec_model, tools=bench.tools(),
                         max_steps=cfg["executor"]["max_steps"],
                         temperature=cfg["executor"]["temperature"])
-    planner = Planner(client, models["cheap"])
+    planner = Planner(client, exec_model)
+    print(f"arithmetic executor model: {exec_model}")
     return bench, train, eval_, executor, planner
 
 
@@ -99,6 +104,9 @@ def main() -> None:
     ap.add_argument("--no-calc", action="store_true",
                     help="withhold the calculator tool and use the small-number/long-chain "
                          "hard variant (controlled capability gap for the ESCALATE test bed)")
+    ap.add_argument("--cheap-model", default=None,
+                    help="override the arithmetic executor+planner model (OpenRouter slug) "
+                         "without editing config; used for weak-cheap-model capability probes")
     # tau-bench knobs.
     ap.add_argument("--env", default="retail", help="tau-bench domain: retail | airline")
     ap.add_argument("--tb-split", default="test", help="tau-bench task split: train | dev | test")
